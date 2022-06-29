@@ -1,0 +1,66 @@
+print "\n This file demonstrates how to use the epslatex terminal."
+print " It will generate two files: epslatex-inc.eps and epslatex.tex."
+print " \nIf the file gnuplot.cfg is found by LaTeX it will be loaded"
+print " and can be used for further settings, e.g., here it provides"
+print " the package exscale.sty which enlargens the integral sign.\n"
+#pause -1 "Hit return to continue"
+#
+xmin=0.
+xmax=1000.
+ymin=0.
+ymax=0.5
+#
+reset
+set terminal push
+set terminal epslatex standalone linewidth 2 rounded \
+  dashlen 4 color '' 12
+set output 'epslatex.tex'
+unset autoscale
+set xr [xmin:xmax]
+set yr [ymin:ymax]
+
+unset colorbox
+#
+# reset linetypes to base dash patterns
+#
+#set for [i=1:5] linetype i dt 3
+
+#
+# define line styles using explicit rgbcolor names
+#
+set style line 1 lt 1 lc rgb "red" lw 3
+set style line 2 lt 1 lc rgb "orange" lw 2
+set style line 3 lt 1 lc rgb "yellow" lw 3
+set style line 4 lt 1 lc rgb "green" lw 2
+
+save_encoding = GPVAL_ENCODING
+set encoding iso_8859_1
+set format x '$%g$'
+set format y '$%.2f$'
+set xtics 100
+set xlabel 'Iteration'
+set ylabel '$\epsilon_x=|P_x\rho-\rho|$'
+set style func lines
+plot "epsilonF.txt" with lines ls 1 title '$\epsilon_m$',\
+     "epsilonS.txt" with lines ls 2 title '$\epsilon_s$'
+set output
+#
+set terminal epslatex standalone oldstyle linewidth 2 rounded \
+  dashlen 1 color '' 12
+set output 'epslatex-oldstyle.tex'
+set tics scale 10
+replot
+set output
+#
+print "\n Now, either run"
+print "   latex epslatex"
+print "   dvips epslatex"
+print " and have a look at epslatex.ps; or run"
+print "   epstopdf epslatex-inc.eps"
+print "   pdflatex epslatex"
+print " and have a look at epslatex.pdf."
+print " Do the same with epslatex-oldstyle.tex."
+#
+#set terminal pop
+set encoding save_encoding
+reset
