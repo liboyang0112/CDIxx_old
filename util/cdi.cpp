@@ -268,6 +268,14 @@ void ApplyERSupport(bool insideS, fftw_complex &rhonp1, fftw_complex &rhoprime){
     rhonp1[0] = rhonp1[1] = 0;
   }
 }
+void ApplyPOSERSupport(bool insideS, fftw_complex &rhonp1, fftw_complex &rhoprime){
+  if(insideS){
+    rhonp1[0] = rhoprime[0]*( rhoprime[0] > 0 );
+    rhonp1[1] = 0;
+  }else{
+    rhonp1[0] = rhonp1[1] = 0;
+  }
+}
 void ApplyHIOSupport(bool insideS, fftw_complex &rhonp1, fftw_complex &rhoprime, double beta){
   if(insideS){
     rhonp1[0] = rhoprime[0];
@@ -276,6 +284,17 @@ void ApplyHIOSupport(bool insideS, fftw_complex &rhonp1, fftw_complex &rhoprime,
     rhonp1[0] -= beta*rhoprime[0];
     rhonp1[1] -= beta*rhoprime[1];
   }
+}
+void ApplyPOSHIOSupport(bool insideS, fftw_complex &rhonp1, fftw_complex &rhoprime, double beta){
+  if(insideS){
+    rhonp1[0] = rhoprime[0]*( rhoprime[0] > 0 );
+    if(rhonp1[0]>1) rhonp1[0] = 1;
+  }else{
+    rhonp1[0] -= beta*rhoprime[0];
+    if(rhonp1[0]<0) rhonp1[0]=0;
+    if(rhonp1[0]>1) rhonp1[0]=1;
+  }
+  rhonp1[1] = 0;
 }
 void ApplySFSupport(bool insideS, fftw_complex &rhonp1, fftw_complex &rhoprime){
   if(insideS){
@@ -299,6 +318,20 @@ void ApplyDMSupport(bool insideS, fftw_complex &rhonp1, fftw_complex &rhop, fftw
   rhonp1[0] = rho.real();
   rhonp1[1] = rho.imag();
 }
+void ApplyPOSDMSupport(bool insideS, fftw_complex &rhonp1, fftw_complex &rhop, fftw_complex &pmsrho, double gammas, double gammam, double beta){
+
+  complex<double> rho(rhonp1[0],rhonp1[1]);
+  complex<double> rhoprime(rhop[0],rhop[1]);
+  complex<double> pmpsrho(pmsrho[0],pmsrho[1]);
+  if(insideS){
+    rho = (1-beta*gammam)*rhoprime+beta*(1+gammam+gammas)*rhoprime-beta*(1+gammas)*pmpsrho;
+  }else{
+    rho += beta*gammas*rhoprime-beta*(1+gammas)*pmpsrho;
+  }
+  rhonp1[0] = rho.real();
+  if(rhonp1[0]<0) rhonp1[0] = 0;
+  rhonp1[1] = 0;
+}
 int main(int argc, char** argv )
 {
     Mat intensity = imread( argv[1], 1 );
@@ -309,6 +342,7 @@ int main(int argc, char** argv )
     fftw_complex* fftresult = 0;
     fftw_complex* gkprime = 0;
     fftw_complex* pmpsg = 0;
+    bool useDM = 0;
     int row, column;
     Mat* cache;
     gkp1 = createWaveFront(extend(intensity,oversampling), extend(phase,oversampling), row, column,cache);
@@ -322,9 +356,12 @@ int main(int argc, char** argv )
     re.endy = column-re.starty;
     if(1)
     for(int i = 0; i<row*column; i++){ //remove the phase information
+      complex<double> tmp(targetfft[i][0],targetfft[i][1]);
+     // double randphase = arg(tmp);//static_cast<double>(rand())/RAND_MAX*2*pi;
       double randphase = static_cast<double>(rand())/RAND_MAX*2*pi;
-      targetfft[i][0] = rms(targetfft[i][0],targetfft[i][1])*cos(randphase);
-      targetfft[i][1] = rms(targetfft[i][0],targetfft[i][1])*sin(randphase);
+      double mod = rms(targetfft[i][0],targetfft[i][1]);
+      targetfft[i][0] = mod*cos(randphase);
+      targetfft[i][1] = mod*sin(randphase);
       pmpsg[i][0] = targetfft[i][0];
       pmpsg[i][1] = targetfft[i][1];
       fftresult[i][0] = targetfft[i][0];
@@ -346,25 +383,30 @@ int main(int argc, char** argv )
     fepS.open("epsilonS.txt",ios::out);
     int niters = 1000;
     for(int iter = 0; iter < niters; iter++){                                                            
+      //start iteration
       if(iter%100==0) printf("Iteration Number : %d\n", iter);
-      applyMod(fftresult,targetfft,row,column);  //apply phase to targetfft, Pm
-      applyMod(pmpsg,targetfft,row,column);  //apply phase to targetfft, Pm
+      applyMod(fftresult,targetfft,row,column);  //apply mod to fftresult, Pm
+      if(useDM) applyMod(pmpsg,targetfft,row,column);  
       epsilonS = epsilonF = 0;
       gkprime = fftw(fftresult,row,column,gkprime,0);
-      pmpsg = fftw(pmpsg,row,column,pmpsg,0);
-      //start iteration
+      if(useDM) pmpsg = fftw(pmpsg,row,column,pmpsg,0);
       for(int i = 0; i<row; i++){ //apply support on O field; Ps
         for(int j = 0; j<column; j++){ 
 	  epsilonF+=rms(gkp1[i*column+j][0]-gkprime[i*column+j][0],gkp1[i*column+j][1]-gkprime[i*column+j][1]);
 	  fftw_complex tmp = {gkp1[i*column+j][0],gkp1[i*column+j][1]};
 	  bool inside = rectSupport(i,j,&re);
-	  //if(iter >= niters - 20 || iter%20==0) ApplyERSupport(inside,gkp1[i*column+j],gkprime[i*column+j]);
+	  //if(iter >= niters - 20 ) ApplyERSupport(inside,gkp1[i*column+j],gkprime[i*column+j]);
+	  if(iter >= niters - 20 || iter % 20 == 0) ApplyERSupport(inside,gkp1[i*column+j],gkprime[i*column+j]);
+	  //if(iter >= niters - 20 || iter<20) ApplyERSupport(inside,gkp1[i*column+j],gkprime[i*column+j]);
+	  //if(iter >= niters - 20) ApplyERSupport(inside,gkp1[i*column+j],gkprime[i*column+j]);
 	  //ApplyERSupport(rectSupport(i,j,&re),gkp1[i*column+j],gkprime[i*column+j]);
-	  // ApplyHIOSupport(inside,gkp1[i*column+j],gkprime[i*column+j],beta_HIO);
+	  //else ApplyHIOSupport(inside,gkp1[i*column+j],gkprime[i*column+j],beta_HIO);
+	  //else ApplyPOSHIOSupport(inside,gkp1[i*column+j],gkprime[i*column+j],beta_HIO);
+	  ApplyHIOSupport(inside,gkp1[i*column+j],gkprime[i*column+j],beta_HIO);
 	  //else {
-            ApplyDMSupport(inside,gkp1[i*column+j], gkprime[i*column+j], pmpsg[i*column+j], gammas, gammam, beta);
-            ApplyERSupport(inside,pmpsg[i*column+j],gkp1[i*column+j]);
+          //ApplyPOSDMSupport(inside,gkp1[i*column+j], gkprime[i*column+j], pmpsg[i*column+j], gammas, gammam, beta);
           //}
+          //ApplyPOSERSupport(inside,pmpsg[i*column+j],gkp1[i*column+j]);
 	  //ApplyHIOSupport(rectSupport(i,j,&re),gkp1[i*column+j],gkprime[i*column+j],beta);
 	  //else ApplySFSupport(rectSupport(i,j,&re),gkp1[i*column+j],gkprime[i*column+j]);
 
@@ -378,7 +420,7 @@ int main(int argc, char** argv )
 
       //if(sqrt(epsilonS/row/column)<0.05) break;
       fftresult = fftw(gkp1,row,column,fftresult,1); // FFT to get f field;
-      pmpsg = fftw(pmpsg,row,column,pmpsg,1); // FFT to get f field;
+      if(useDM) pmpsg = fftw(pmpsg,row,column,pmpsg,1); // FFT to get f field;
       //end iteration
     }
     fepF.close();
@@ -388,8 +430,8 @@ int main(int argc, char** argv )
     imwrite("recon_intensity.png",*cache);
     convertFromFFTWToOpencv(*cache,row, column, gkp1, PHASE,0);
     imwrite("recon_phase.png",*cache);
-    convertFromFFTWToOpencv(*cache,row, column, pmpsg, MOD2,1);
-    imwrite("recon_pmpsg.png",*cache);
+    if(useDM)  convertFromFFTWToOpencv(*cache,row, column, pmpsg, MOD2,1);
+    if(useDM)  imwrite("recon_pmpsg.png",*cache);
     convertFromFFTWToOpencv(*cache,row, column, fftresult, MOD2,1);
     imwrite("recon_pattern.png",*cache);
     return 0;
