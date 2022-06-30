@@ -37,7 +37,7 @@ save_encoding = GPVAL_ENCODING
 set encoding iso_8859_1
 set format x '$%g$'
 set format y '$%.2f$'
-set xtics 100
+set xtics 500
 set xlabel 'Iteration'
 set ylabel '$\epsilon_x=|P_x\rho-\rho|$'
 set style func lines
