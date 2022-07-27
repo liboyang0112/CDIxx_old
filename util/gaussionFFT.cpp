@@ -3,7 +3,7 @@
 # include <stdio.h>
 # include <time.h>
 # include <random>
-# include <complex>
+# include <complex.h>
 
 #include <stdio.h>
 #include <opencv2/opencv.hpp>
@@ -73,11 +73,11 @@ fftw_complex* fftw ( fftw_complex* in, int row, int column, fftw_complex *out = 
 }
 /******************************************************************************/
 
-fftw_complex* convertFromOpencvToFFTW(Mat I, int row, int column, fftw_complex* cache = 0){
+fftw_complex* convertFromOpencvToFFTW(Mat image, int row, int column, fftw_complex* cache = 0){
   if(!cache) cache = (fftw_complex*) fftw_malloc ( sizeof ( fftw_complex ) * row * column );
   uchar* rowp;
   for(int x = 0; x < row ; x++){
-    rowp = I.ptr<uchar>(x);
+    rowp = image.ptr<uchar>(x);
     for(int y = 0; y<column; y++){
       cache[x*column+y][0] = (double)rowp[y];
       cache[x*column+y][1] = 0;
@@ -86,12 +86,12 @@ fftw_complex* convertFromOpencvToFFTW(Mat I, int row, int column, fftw_complex* 
   return cache;
 }
 
-void convertFromFFTWToOpencv(Mat &I, int row, int column, fftw_complex* cache, mode m, bool isFrequency, double decay = 1){
+void convertFromFFTWToOpencv(Mat &image, int row, int column, fftw_complex* cache, mode m, bool isFrequency, double decay = 1){
   uchar* rowp;
   for(int x = 0; x < row ; x++){
     int targetx = x;
     if(isFrequency) targetx = x<row/2?x+row/2:(x-row/2);
-    rowp = I.ptr<uchar>(targetx);
+    rowp = image.ptr<uchar>(targetx);
     for(int y = 0; y<column; y++){
       double target;
       complex<double> tmpc(cache[x*column+y][0],cache[x*column+y][1]);
@@ -143,7 +143,7 @@ int main(int argc, char** argv )
     fftw_complex* targetField = (fftw_complex*) fftw_malloc ( sizeof ( fftw_complex ) * row * column );
     for(int x = 0; x < row ; x++){
       for(int y = 0; y<column; y++){
-	double Emod =  3*gaussian(((double)x)/row-0.5,((double)y)/column-0.5,0.5);
+	double Emod =  3*gaussian(((double)x)/row-0.5,((double)y)/column-0.5,0.1);
 	double Emodt = 3*gaussian(((double)x)/row-0.1,((double)y)/column-0.5,0.01)
 		     + 3*gaussian(((double)x)/row-0.2,((double)y)/column-0.5,0.01)
 		     + 3*gaussian(((double)x)/row-0.3,((double)y)/column-0.5,0.01)
@@ -154,8 +154,8 @@ int main(int argc, char** argv )
 		     + 3*gaussian(((double)x)/row-0.8,((double)y)/column-0.5,0.01)
 		     + 3*gaussian(((double)x)/row-0.9,((double)y)/column-0.5,0.01);
 	double randphase = static_cast<double>(rand())/RAND_MAX*2*pi;
-        inputField[x*column+y][0] = Emod*sin(randphase);
-        inputField[x*column+y][1] = Emod*cos(randphase);
+        inputField[x*column+y][0] = Emod;//*sin(randphase);
+        inputField[x*column+y][1] = 0;//Emod*cos(randphase);
         int targetx = x<row/2?x+row/2:(x-row/2);
         int targety = y<column/2?y+column/2:(y-column/2);
         targetField[targetx*column+targety][0] = Emodt*sin(randphase);
@@ -168,7 +168,7 @@ int main(int argc, char** argv )
     imwrite("inputField.png",image);
     convertFromFFTWToOpencv(image,row, column, targetField, MOD2,1);
     imwrite("targetField.png",image);
-    for(int i = 0; i<20; i++){
+    for(int i = 0; i<1; i++){
       fftresult = fftw(inputField, row, column,fftresult,1);
       applyPhase(fftresult,targetField,row,column);
       fftbwresult = fftw(targetField,row,column,fftbwresult,0);
