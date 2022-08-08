@@ -127,6 +127,25 @@ void imageLoop(Mat* data, void* arg, bool isFrequency = 0){
     }
   }
 }
+template<typename functor, typename format1, typename format2>
+void imageLoop(Mat* data, Mat* dataout, void* arg, bool isFrequency = 0){
+  int row = data->rows;
+  int column = data->cols;
+  format1 *rowp;
+  format2 *rowo;
+  functor* func = static_cast<functor*>(arg);
+  for(int x = 0; x < row ; x++){
+    int targetx = x;
+    if(isFrequency) targetx = x<row/2?x+row/2:(x-row/2);
+    rowp = data->ptr<format1>(x);
+    rowo = dataout->ptr<format2>(targetx);
+    for(int y = 0; y<column; y++){
+      int targety = y;
+      if(isFrequency) targety = y<column/2?y+column/2:(y-column/2);
+      (*func)(targetx, targety , rowp[y], rowo[targety]);
+    }
+  }
+}
 Mat* fftw ( Mat* in, Mat *out = 0, bool isforward = 1)
 {
   fftw_plan plan_forward;
@@ -160,6 +179,71 @@ Mat* fftw ( Mat* in, Mat *out = 0, bool isforward = 1)
   return out;
 }
 /******************************************************************************/
+double getVal(mode m, fftw_complex &data){
+  complex<double> &tmpc = *(complex<double>*)(data);
+  switch(m){
+    case MOD:
+      return std::abs(tmpc);
+      break;
+    case MOD2:
+      return pow(std::abs(tmpc),2);
+      break;
+    case IMAG:
+      return tmpc.imag();
+      break;
+    case PHASE:
+      if(std::abs(tmpc)==0) return 0;
+      return (std::arg(tmpc)+pi)/2/pi;
+      break;
+    default:
+      return tmpc.real();
+  }
+}
+double getVal(mode m, double &data){
+  return data;
+}
+template<typename T=fftw_complex>
+Mat* convertFromFFTWToOpencv(Mat *fftwImage, Mat* opencvImage = 0, mode m = MOD, bool isFrequency = 0, double decay = 1, const char* label= "default",bool islog = 0){
+  pixeltype* rowo;
+  T* rowp;
+  int row = fftwImage->rows;
+  int column = fftwImage->cols;
+  if(!opencvImage) opencvImage = new Mat(row,column,format_cv);
+  int tot = 0;
+  double max = 0;
+  for(int x = 0; x < row ; x++){
+    int targetx = x;
+    if(isFrequency) targetx = x<row/2?x+row/2:(x-row/2);
+    rowo = opencvImage->ptr<pixeltype>(targetx);
+    rowp = fftwImage->ptr<T>(x);
+    for(int y = 0; y<column; y++){
+      double target = getVal(m, rowp[y]);
+      if(max < target) max = target;
+      if(target<0) target = -target;
+      if(islog){
+        if(target!=0)
+          target = log2(target)*rcolor/log2(rcolor)+rcolor;
+	if(target < 0) target = 0;
+	
+      }
+      else target*=rcolor*decay;
+
+      tot += (int)target;
+      if(target>=rcolor) {
+	      //printf("larger than maximum of %s png %f\n",label, target);
+	      target=rcolor-1;
+	      //target=0;
+      }
+      int targety = y;
+      if(isFrequency) targety = y<column/2?y+column/2:(y-column/2);
+      rowo[targety] = floor(target);
+      //if(opencv_reverted) rowp[targety] = rcolor - 1 - rowp[targety];
+      //rowp[targety] = rcolor - 1 - rowp[targety];
+    }
+  }
+  printf("total intensity %s: %d, max: %f\n", label, tot, max);
+  return opencvImage;
+}
 template <typename inputtype>
 Mat read16bitImage(Mat imagein, int nbitsimg)
 {
@@ -202,7 +286,7 @@ Mat read16bitImage(Mat imagein, int nbitsimg)
     return image;
 }
 
-Mat readImage(char* name){
+Mat readImage(char* name, bool isFrequency = 0){
   Mat imagein = imread( name, IMREAD_UNCHANGED  );
   if(nbits == 8) {
    if(imagein.channels()==3){
@@ -215,9 +299,22 @@ Mat readImage(char* name){
   }
   if(imagein.depth() == CV_8U){
     return read16bitImage<char>(imagein,8);
-  }else{
+  }else if(imagein.depth() == CV_16U){
     return read16bitImage<uint16_t>(imagein,16);
+  }else{  //Image data is float
+    printf("Image is not recognized as integer type, Image data is treated as floats\n");
+    Mat *tmp = convertFromFFTWToOpencv<double>(&imagein,0,MOD,0,1,"input",1); //Here we save the log of the input image
+    imwrite("inputs.png", *tmp);
+    delete tmp;
+    Mat image(imagein.rows, imagein.cols, CV_64FC2);
+    auto f = [&](int x, int y, double &data, fftw_complex &dataout){
+      dataout[0] = data;
+      dataout[1] = 0;
+    };
+    imageLoop<decltype(f),double,fftw_complex>(&imagein,&image,&f,1);
+    return image;
   }
+
 }
 
 Mat* convertFromOpencvToFFTW(Mat &image, Mat* cache = 0, bool isFrequency = 0, const char* label= "default"){
@@ -284,54 +381,6 @@ Mat* convertFromOpencvToFFTW(Mat &image,Mat &phase,Mat* cache = 0){
   return cache;
 }
 
-void convertFromFFTWToOpencv(Mat &image, Mat* cache, mode m, bool isFrequency, double decay = 1, const char* label= "default"){
-  pixeltype* rowp;
-  fftw_complex* rowo;
-  int row = cache->rows;
-  int column = cache->cols;
-  int tot = 0;
-  for(int x = 0; x < row ; x++){
-    int targetx = x;
-    if(isFrequency) targetx = x<row/2?x+row/2:(x-row/2);
-    rowp = image.ptr<pixeltype>(targetx);
-    rowo = cache->ptr<fftw_complex>(x);
-    for(int y = 0; y<column; y++){
-      double target;
-      complex<double> &tmpc = *(complex<double>*)(rowo[y]);
-      switch(m){
-        case MOD:
-          target = std::abs(tmpc);
-          break;
-        case MOD2:
-          target = pow(std::abs(tmpc),2);
-          break;
-        case IMAG:
-          target = tmpc.imag();
-          break;
-        case PHASE:
-	  if(std::abs(tmpc)==0) target = 0;
-	  else target = (std::arg(tmpc)+pi)/2/pi;
-          break;
-        default:
-          target = tmpc.real();
-      }
-      target*=rcolor*decay;
-      tot += (int)target;
-      if(target<0) target = -target;
-      if(target>=rcolor) {
-	      //printf("larger than maximum of %s png %f\n",label, target);
-	      target=rcolor-1;
-	      //target=0;
-      }
-      int targety = y;
-      if(isFrequency) targety = y<column/2?y+column/2:(y-column/2);
-      rowp[targety] = floor(target);
-      //if(opencv_reverted) rowp[targety] = rcolor - 1 - rowp[targety];
-      //rowp[targety] = rcolor - 1 - rowp[targety];
-    }
-  }
-  printf("total intensity %s: %d\n", label, tot);
-}
 void applyMod(Mat* source, Mat* target, support *bs = 0){
   assert(source!=0);
   assert(target!=0);
@@ -551,10 +600,10 @@ void phaseRetrieve( experimentConfig &setups, Mat* targetfft, Mat* gkp1 = 0, Mat
       //start iteration
       if(iter%100==0) {
         printf("Iteration Number : %d\n", iter);
-        convertFromFFTWToOpencv(*cache, gkp1, MOD2,0);
+        convertFromFFTWToOpencv( gkp1,cache, MOD2,0);
         std::string iterstr = to_string(iter);
         imwrite("recon_intensity"+iterstr+".png",*cache);
-        convertFromFFTWToOpencv(*cache, gkp1, PHASE,0);
+        convertFromFFTWToOpencv( gkp1,cache, PHASE,0);
         imwrite("recon_phase"+iterstr+".png",*cache);
       }
       if(useBS) applyMod(fftresult,targetfft,&cir);  //apply mod to fftresult, Pm
@@ -602,9 +651,9 @@ void phaseRetrieve( experimentConfig &setups, Mat* targetfft, Mat* gkp1 = 0, Mat
         fepS<<sqrt(epsilonS/tot)<<endl;
       }
       if(iter==0) {
-        convertFromFFTWToOpencv(*cache, gkp1, MOD2,0);
+        convertFromFFTWToOpencv( gkp1,cache, MOD2,0);
         imwrite("recon_support.png",*cache);
-        convertFromFFTWToOpencv(*cache, gkp1, PHASE,0);
+        convertFromFFTWToOpencv( gkp1,cache, PHASE,0);
         imwrite("recon_phase_support.png",*cache);
       }
 
@@ -616,13 +665,13 @@ void phaseRetrieve( experimentConfig &setups, Mat* targetfft, Mat* gkp1 = 0, Mat
     fepF.close();
     fepS.close();
 
-    convertFromFFTWToOpencv(*cache, gkp1, MOD2,0);
+    convertFromFFTWToOpencv( gkp1,cache, MOD2,0);
     imwrite("recon_intensity.png",*cache);
-    convertFromFFTWToOpencv(*cache, gkp1, PHASE,0);
+    convertFromFFTWToOpencv(gkp1, cache, PHASE,0);
     imwrite("recon_phase.png",*cache);
-    if(useDM)  convertFromFFTWToOpencv(*cache, pmpsg, MOD2,1);
+    if(useDM)  convertFromFFTWToOpencv( pmpsg, cache, MOD2,1);
     if(useDM)  imwrite("recon_pmpsg.png",*cache);
-    convertFromFFTWToOpencv(*cache, fftresult, MOD2,1);
+    convertFromFFTWToOpencv( fftresult, cache, MOD2,1);
     imwrite("recon_pattern.png",*cache);
 }
 
@@ -670,7 +719,7 @@ int main(int argc, char** argv )
       
     }
     int row, column;
-    Mat intensity = readImage( argv[2] );
+    Mat intensity = readImage( argv[2] , !runSim);
     //maskOperation(intensity,intensity);
     Mat ele = getStructuringElement(MORPH_RECT,Size(3,3),Point(1,1));
     //erode( intensity, intensity, ele);
@@ -782,15 +831,17 @@ int main(int argc, char** argv )
 	};
         imageLoop<decltype(f)>(gkp1,&f,0);
       }
-      convertFromFFTWToOpencv(*cache, gkp1, MOD2,0,1,"Object MOD2");
+      convertFromFFTWToOpencv(gkp1, cache, MOD2,0,1,"Object MOD2");
       imwrite("init_object.png",*cache);
-      convertFromFFTWToOpencv(*cache, gkp1, PHASE,0,1,"Object Phase");
+      convertFromFFTWToOpencv(gkp1, cache, PHASE,0,1,"Object Phase");
       imwrite("init_object_phase.png",*cache);
       targetfft = fftw(gkp1,targetfft,1); 
     }else{
-      if(mergeDepth == 1) cache = cache1;
-      else cache = new Mat(row, column, format_cv);
-      targetfft = convertFromOpencvToFFTW(*cache1,targetfft,1); 
+      //if(mergeDepth == 1) cache = cache1;
+      //else 
+      cache = new Mat(row, column, format_cv);
+      //targetfft = convertFromOpencvToFFTW(*cache1,targetfft,1); 
+      targetfft = cache1;
     }
     if(restart){
       intensity = readImage(argv[3]);
@@ -830,27 +881,28 @@ int main(int argc, char** argv )
         data = mod*exp(complex<double>(0,randphase));
       }
       }
-      datacor[0] = pow(mod,2)*(tx-row/2)*(ty-column/2)/20;
+      //datacor[0] = pow(mod,2)*(tx-row/2)*(ty-column/2)/90;
+      datacor[0] = pow(mod,2);//to take the derivitave: append *(tx-row/2)*(ty-column/2)/20;
       datacor[1] = 0;
     }
-    convertFromFFTWToOpencv(*cache, autocorrelation, MOD,1,1,"HERALDO U core");
+    convertFromFFTWToOpencv( autocorrelation, cache, MOD,1,1,"HERALDO U core");
     imwrite("ucore.png",*cache);
     autocorrelation = fftw(autocorrelation, autocorrelation, 0);
-        auto f = [&](int x, int y, fftw_complex &data){
-          auto tmp = (complex<double>*)&data;
-	  *tmp = 1.4+*tmp;
-	};
-        imageLoop<decltype(f)>(autocorrelation,&f,0);
+    auto f = [&](int x, int y, fftw_complex &data){
+      auto tmp = (complex<double>*)&data;
+      *tmp = 1.4+*tmp;
+    };
+    //imageLoop<decltype(f)>(autocorrelation,&f,0);
     if(!restart){
       fftresult = new Mat();
       targetfft->copyTo(*fftresult);
     }
-    convertFromFFTWToOpencv(*cache, targetfft, PHASE,1);
+    convertFromFFTWToOpencv(targetfft, cache, PHASE,1);
     imwrite("init_phase.png",*cache);
-    convertFromFFTWToOpencv(*cache, targetfft, MOD2,1,1,"Pattern MOD2");
+    convertFromFFTWToOpencv(targetfft, cache, MOD2,1,1,"Pattern MOD2");
     imwrite("init_pattern.png",*cache);
-    targetfft = convertFromOpencvToFFTW(*cache, targetfft , 1 , "waveFront");
-    convertFromFFTWToOpencv(*cache, autocorrelation, MOD2,1,1,"Autocorrelation MOD2");
+    targetfft = convertFromOpencvToFFTW(*cache, targetfft, 1 , "waveFront");
+    convertFromFFTWToOpencv(autocorrelation, cache, MOD2,1,1,"Autocorrelation MOD2",1);
     imwrite("auto_correlation.png",*cache);
     //Phase retrieving starts from here. In the following, only targetfft is needed.
     if(doIteration) phaseRetrieve(setups, targetfft, gkp1, cache, fftresult); //fftresult is the starting point of the iteration
