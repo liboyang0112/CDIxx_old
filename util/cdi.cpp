@@ -1,7 +1,6 @@
 #include <complex>
 #include <tbb/tbb.h>
 #include <fftw3-mpi.h>
-//# include <stdlib.h>
 # include <cassert>
 # include <stdio.h>
 # include <time.h>
@@ -46,38 +45,23 @@ static const auto format_cv = CV_8UC1;
 
 static const int rcolor = pow(2,nbits);
 static bool opencv_reverted = 0;
+static const double scale = 15;
 
 const double pi = 3.1415927;
 using namespace cv;
 double gaussian(double x, double y, double sigma){
   double r2 = pow(x,2) + pow(y,2);
   return exp(-r2/2/pow(sigma,2));
-  //return 1./sqrt(2*pi*sigma)*exp(-r2/2/pow(sigma,2));
 }
 
-template<typename T>
-T sqrsum(int cnt, T val){
-  cnt++;
-  return val*val;
+double gaussian_norm(double x, double y, double sigma){
+  return 1./(2*pi*sigma*sigma)*gaussian(x,y,sigma);
 }
-template<typename T, typename... Ts>
-T sqrsum(int &cnt, T val, Ts... vals){
-  cnt++;
-  return val*val+sqrsum(cnt,vals...);
-}
-template<typename... Ts>
-double rms(Ts... vals){
-  int n = 1;
-  double sum = sqrsum(n, vals...);
-  return sqrt(sum/n);
-}
+
 enum mode {MOD2,MOD, REAL, IMAG, PHASE};
 /******************************************************************************/
 
-void maskOperation(Mat &input, Mat &output){
-  Mat kernel = (Mat_<char>(3,3) <<  0, -1,  0,
-                                     -1,  5, -1,
-                                      0, -1,  0);
+void maskOperation(Mat &input, Mat &output, Mat &kernel){
   filter2D(input, output, input.depth(), kernel);
 }
 
@@ -85,6 +69,19 @@ class support{
 public:
   support(){};
   virtual bool isInside(int x, int y) = 0;
+};
+class ImageMask : public support{
+public:
+  Mat *image; //rows, cols, CV_64FC1
+  ImageMask():support(){};
+  double threshold;
+  bool isInside(int x, int y){
+    if(image->ptr<double>(x)[y] < threshold) {
+	    //printf("%d, %d = %f lower than threshold, dropping\n",x,y,image->ptr<double>(x)[y]);
+	    return false;
+    }
+    return true;
+  }
 };
 class rect : public support{
 public:
@@ -110,22 +107,30 @@ public:
     return false;
   }
 };
-template<typename functor>
+template<typename functor, typename format=fftw_complex>
 void imageLoop(Mat* data, void* arg, bool isFrequency = 0){
   int row = data->rows;
   int column = data->cols;
-  fftw_complex *rowp;
+  format *rowp;
   functor* func = static_cast<functor*>(arg);
   for(int x = 0; x < row ; x++){
     int targetx = x;
     if(isFrequency) targetx = x<row/2?x+row/2:(x-row/2);
-    rowp = data->ptr<fftw_complex>(x);
+    rowp = data->ptr<format>(x);
     for(int y = 0; y<column; y++){
       int targety = y;
       if(isFrequency) targety = y<column/2?y+column/2:(y-column/2);
       (*func)(targetx, targety , rowp[y]);
     }
   }
+}
+Mat* gaussianKernel(int rows, int cols, double sigma){
+  Mat* image = new Mat(rows, cols, CV_64FC1);
+  auto f = [&](int x, int y, double &data){
+    data = gaussian_norm(x-rows/2,y-cols/2,sigma);
+  };
+  imageLoop<decltype(f), double>(image,&f);
+  return image;
 }
 template<typename functor, typename format1, typename format2>
 void imageLoop(Mat* data, Mat* dataout, void* arg, bool isFrequency = 0){
@@ -158,22 +163,10 @@ Mat* fftw ( Mat* in, Mat *out = 0, bool isforward = 1)
 
   fftw_execute ( plan_forward );
 
-  for(int i = 0; i < row*column ; i++){
+  for(int i = 0; i < out->total() ; i++){
     ((fftw_complex*)out->data)[i][0]*=ratio;
     ((fftw_complex*)out->data)[i][1]*=ratio;
-  }
-/*only used to check the correctness of the transformation
-  fftw_plan plan_backward
-  plan_backward = fftw_plan_dft_2d ( row, column, out, in, FFTW_BACKWARD, FFTW_ESTIMATE );
-
-  fftw_execute ( plan_backward );
-
-  for(int i = 0; i < row*column ; i++){
-    in[i][0]*=ratio;
-    in[i][1]*=ratio;
-  }
-  fftw_destroy_plan ( plan_backward );
-*/
+  } //normalization
   fftw_destroy_plan ( plan_forward );
 
   return out;
@@ -203,7 +196,7 @@ double getVal(mode m, double &data){
   return data;
 }
 template<typename T=fftw_complex>
-Mat* convertFromFFTWToOpencv(Mat *fftwImage, Mat* opencvImage = 0, mode m = MOD, bool isFrequency = 0, double decay = 1, const char* label= "default",bool islog = 0){
+Mat* convertFromComplexToInteger(Mat *fftwImage, Mat* opencvImage = 0, mode m = MOD, bool isFrequency = 0, double decay = 1, const char* label= "default",bool islog = 0){
   pixeltype* rowo;
   T* rowp;
   int row = fftwImage->rows;
@@ -303,12 +296,12 @@ Mat readImage(char* name, bool isFrequency = 0){
     return read16bitImage<uint16_t>(imagein,16);
   }else{  //Image data is float
     printf("Image is not recognized as integer type, Image data is treated as floats\n");
-    Mat *tmp = convertFromFFTWToOpencv<double>(&imagein,0,MOD,0,1,"input",1); //Here we save the log of the input image
+    Mat *tmp = convertFromComplexToInteger<double>(&imagein,0,MOD,0,1,"input",1); //Here we save the logarithm of the input image
     imwrite("inputs.png", *tmp);
     delete tmp;
     Mat image(imagein.rows, imagein.cols, CV_64FC2);
     auto f = [&](int x, int y, double &data, fftw_complex &dataout){
-      dataout[0] = data;
+      dataout[0] = max(0.,sqrt(data));
       dataout[1] = 0;
     };
     imageLoop<decltype(f),double,fftw_complex>(&imagein,&image,&f,1);
@@ -317,7 +310,7 @@ Mat readImage(char* name, bool isFrequency = 0){
 
 }
 
-Mat* convertFromOpencvToFFTW(Mat &image, Mat* cache = 0, bool isFrequency = 0, const char* label= "default"){
+Mat* convertFromIntegerToComplex(Mat &image, Mat* cache = 0, bool isFrequency = 0, const char* label= "default"){
   int row = image.rows/mergeDepth*mergeDepth;
   int column = image.cols/mergeDepth*mergeDepth;
   if(!cache) cache = new Mat(row/mergeDepth, column/mergeDepth, CV_64FC2);
@@ -356,7 +349,7 @@ Mat* convertFromOpencvToFFTW(Mat &image, Mat* cache = 0, bool isFrequency = 0, c
   return cache;
 }
 
-Mat* convertFromOpencvToFFTW(Mat &image,Mat &phase,Mat* cache = 0){
+Mat* convertFromIntegerToComplex(Mat &image,Mat &phase,Mat* cache = 0){
   int row = image.rows;
   int column = image.cols;
   if(!cache) cache = new Mat(row, column, CV_64FC2);
@@ -385,7 +378,7 @@ void applyMod(Mat* source, Mat* target, support *bs = 0){
   assert(source!=0);
   assert(target!=0);
   double tolerance = 0.5/rcolor;
-  double maximum = pow(mergeDepth,2);
+  double maximum = pow(mergeDepth,2)*scale;
   int row = target->rows;
   int column = target->cols;
   parallel_for(
@@ -464,8 +457,8 @@ Mat* createWaveFront(Mat &intensity, Mat &phase, int rows, int columns, Mat* &it
     imageptr = &phase;
   }
   Mat &phase_sc = *imageptr;
-  //wavefront = convertFromOpencvToFFTW(intensity_sc, wavefront,0,"waveFront");
-  wavefront = convertFromOpencvToFFTW(intensity_sc, phase_sc, wavefront);
+  //wavefront = convertFromIntegerToComplex(intensity_sc, wavefront,0,"waveFront");
+  wavefront = convertFromIntegerToComplex(intensity_sc, phase_sc, wavefront);
   delete imageptr;
   return wavefront;
   //imwrite("input.png",image);
@@ -506,6 +499,14 @@ void ApplyPOSERSupport(bool insideS, fftw_complex &rhonp1, fftw_complex &rhoprim
     rhonp1[0] = rhonp1[1] = 0;
   }
 }
+void ApplyLoosePOSERSupport(bool insideS, fftw_complex &rhonp1, fftw_complex &rhoprime, double threshold){
+  if(rhoprime[0] < threshold){
+    rhonp1[0] = rhoprime[0]*( rhoprime[0] > 0 );
+  }else{
+    rhonp1[0] = threshold;
+  }
+    rhonp1[1] = 0;
+}
 void ApplyHIOSupport(bool insideS, fftw_complex &rhonp1, fftw_complex &rhoprime, double beta){
   if(insideS){
     rhonp1[0] = rhoprime[0];
@@ -516,12 +517,22 @@ void ApplyHIOSupport(bool insideS, fftw_complex &rhonp1, fftw_complex &rhoprime,
   }
 }
 void ApplyPOSHIOSupport(bool insideS, fftw_complex &rhonp1, fftw_complex &rhoprime, double beta){
-  if(insideS && rhoprime[0] > 0){
+  if(rhoprime[0] > 0 && (insideS/* || rhoprime[0]<30./rcolor*/)){
     rhonp1[0] = rhoprime[0];
     //rhonp1[1] = rhoprime[1];
     rhonp1[1] -= beta*rhoprime[1];
   }else{
     rhonp1[0] -= beta*rhoprime[0];
+    rhonp1[1] -= beta*rhoprime[1];
+  }
+}
+void ApplyLoosePOSHIOSupport(bool insideS, fftw_complex &rhonp1, fftw_complex &rhoprime, double beta, double threshold){
+  if(rhoprime[0] > 0 && (rhoprime[0]<threshold)){
+    rhonp1[0] = rhoprime[0];
+    //rhonp1[1] = rhoprime[1];
+    rhonp1[1] -= beta*rhoprime[1];
+  }else{
+    rhonp1[0] -= beta*(rhoprime[0]);
     rhonp1[1] -= beta*rhoprime[1];
   }
 }
@@ -562,6 +573,7 @@ void ApplyPOSDMSupport(bool insideS, fftw_complex &rhonp1, fftw_complex &rhop, f
 struct experimentConfig{
  bool useDM;
  bool useBS;
+ bool useShrinkMap = 1;
  support* spt;
  support* beamStop;
  bool restart;
@@ -573,6 +585,7 @@ struct experimentConfig{
 
 void phaseRetrieve( experimentConfig &setups, Mat* targetfft, Mat* gkp1 = 0, Mat *cache = 0, Mat* fftresult = 0 ){
     Mat* pmpsg = 0;
+    bool useShrinkMap = setups.useShrinkMap;
     int row = targetfft->rows;
     int column = targetfft->cols;
     bool useDM = setups.useDM;
@@ -596,14 +609,17 @@ void phaseRetrieve( experimentConfig &setups, Mat* targetfft, Mat* gkp1 = 0, Mat
     fepS.open("epsilonS.txt",ios::out |(setups.restart? ios::app:std::ios_base::openmode(0)));
     int niters = 5000;
     int tot = row*column;
-    for(int iter = 0; iter < niters; iter++){                                                            
+    Mat objMod(row,column,CV_64FC1);
+    Mat* maskKernel;
+    double gaussianSigma = 4;
+    for(int iter = 0; iter < niters; iter++){
       //start iteration
       if(iter%100==0) {
         printf("Iteration Number : %d\n", iter);
-        convertFromFFTWToOpencv( gkp1,cache, MOD2,0);
+        convertFromComplexToInteger( gkp1,cache, MOD2,0);
         std::string iterstr = to_string(iter);
         imwrite("recon_intensity"+iterstr+".png",*cache);
-        convertFromFFTWToOpencv( gkp1,cache, PHASE,0);
+        convertFromComplexToInteger( gkp1,cache, PHASE,0);
         imwrite("recon_phase"+iterstr+".png",*cache);
       }
       if(useBS) applyMod(fftresult,targetfft,&cir);  //apply mod to fftresult, Pm
@@ -615,14 +631,24 @@ void phaseRetrieve( experimentConfig &setups, Mat* targetfft, Mat* gkp1 = 0, Mat
       epsilonS = epsilonF = 0;
       gkprime = fftw(fftresult,gkprime,0);
       if(useDM) pmpsg = fftw(pmpsg,pmpsg,0);
+      bool updateMask = iter%20==0 && useShrinkMap && iter!=0;
+      if(updateMask){
+        int size = floor(gaussianSigma*6); // r=3 sigma to ensure the contribution is negligible (0.01 of the maximum)
+        size = size/2*2+1; //ensure odd
+        maskKernel = gaussianKernel(size,size,gaussianSigma);
+      }
       parallel_for(
         tbb::detail::d1::blocked_range<size_t>(0, row),
         [&](const tbb::detail::d1::blocked_range<size_t> &r)
         {
-          for (size_t x = r.begin(); x != r.end(); ++x){
+          for (int x = r.begin(); x != r.end(); ++x){
 	    fftw_complex *gkp1p = gkp1->ptr<fftw_complex>(x);
 	    fftw_complex *gkprimep = gkprime->ptr<fftw_complex>(x);
-            for (size_t y = 0; y < column; ++y){
+	    double *objModp;
+	    if(updateMask){
+              objModp = objMod.ptr<double>(x);
+	    }
+            for (int y = 0; y < column; ++y){
 	      fftw_complex &gkp1data = gkp1p[y];
 	      fftw_complex &gkprimedata = gkprimep[y];
               epsilonF+=hypot(gkp1data[0]-gkprimedata[0],gkp1data[1]-gkprimedata[1]);
@@ -635,25 +661,43 @@ void phaseRetrieve( experimentConfig &setups, Mat* targetfft, Mat* gkp1 = 0, Mat
               //ApplyERSupport(inside,gkp1data,gkprimedata);
               //else ApplyHIOSupport(inside,gkp1data,gkprimedata,beta_HIO);
               //else ApplyPOSHIOSupport(inside,gkp1data,gkprimedata,beta_HIO);
-	      ApplyPOSHIOSupport(inside,gkp1data,gkprimedata,beta_HIO);
+	      ApplyHIOSupport(inside,gkp1data,gkprimedata,beta_HIO);
+	      if(updateMask){
+                objModp[y] = hypot(gkp1data[0],gkp1data[1]);
+	      }
+	      //
+	      //double thres = gaussian(x-row/2,y-column/2,40);
+	      //ApplyLoosePOSHIOSupport(inside,gkp1data,gkprimedata,beta_HIO,thres);
+              //ApplyLoosePOSERSupport(inside,gkp1data,gkprimedata,thres);
               //else {
               //ApplyDMSupport(inside,gkp1data, gkprimedata, pmpsg[index], gammas, gammam, beta);
               //}
               //ApplyERSupport(inside,pmpsg[index],gkp1data);
               //ApplyHIOSupport(inside,gkp1data,gkprimedata,beta);
               //else ApplySFSupport(inside,gkp1data,gkprimedata);
-              epsilonS+=rms(tmp[0]-gkp1data[0],tmp[1]-gkp1data[1]);
+              epsilonS+=hypot(tmp[0]-gkp1data[0],tmp[1]-gkp1data[1]);
 	    }
 	  }
-        },ap);
-      if(iter>=1){
+        },ap
+      );
+      if(updateMask){
+        filter2D(objMod, *((ImageMask*)&re)->image,objMod.depth(),*maskKernel);
+	if(gaussianSigma>1.5) gaussianSigma*=0.99;
+	delete maskKernel;
+      }
+      if(updateMask&&iter%100==0){
+	convertFromComplexToInteger<double>(((ImageMask*)&re)->image, cache,MOD,0);
+	//convertFromComplexToInteger<double>(&objMod, cache,MOD,0);
+        std::string iterstr = to_string(iter);
+	imwrite("mask"+iterstr+".png",*cache);
+      }
+      if(iter!=0){
         fepF<<sqrt(epsilonF/tot)<<endl;
         fepS<<sqrt(epsilonS/tot)<<endl;
-      }
-      if(iter==0) {
-        convertFromFFTWToOpencv( gkp1,cache, MOD2,0);
+      }else {
+        convertFromComplexToInteger( gkp1,cache, MOD2,0);
         imwrite("recon_support.png",*cache);
-        convertFromFFTWToOpencv( gkp1,cache, PHASE,0);
+        convertFromComplexToInteger( gkp1,cache, PHASE,0);
         imwrite("recon_phase_support.png",*cache);
       }
 
@@ -665,13 +709,13 @@ void phaseRetrieve( experimentConfig &setups, Mat* targetfft, Mat* gkp1 = 0, Mat
     fepF.close();
     fepS.close();
 
-    convertFromFFTWToOpencv( gkp1,cache, MOD2,0);
+    convertFromComplexToInteger( gkp1,cache, MOD2,0);
     imwrite("recon_intensity.png",*cache);
-    convertFromFFTWToOpencv(gkp1, cache, PHASE,0);
+    convertFromComplexToInteger(gkp1, cache, PHASE,0);
     imwrite("recon_phase.png",*cache);
-    if(useDM)  convertFromFFTWToOpencv( pmpsg, cache, MOD2,1);
+    if(useDM)  convertFromComplexToInteger( pmpsg, cache, MOD2,1);
     if(useDM)  imwrite("recon_pmpsg.png",*cache);
-    convertFromFFTWToOpencv( fftresult, cache, MOD2,1);
+    convertFromComplexToInteger( fftresult, cache, MOD2,1);
     imwrite("recon_pattern.png",*cache);
 }
 
@@ -696,7 +740,7 @@ int main(int argc, char** argv )
     auto seed = (unsigned)time(NULL);
     bool isFresnel = 0;
     bool doIteration = 1;
-    bool useGaussionLumination = 0;
+    bool useGaussionLumination = 1;
     bool useGaussionHERALDO = 0;
     bool useRectHERALDO = 0;
     fftw_init_threads();
@@ -709,7 +753,7 @@ int main(int argc, char** argv )
     //1657184141 // oversampling = 3, modulation range = 2pi, upright image, random phase
     srand(seed);
     printf("seed:%d\n",seed);
-    double oversampling = 3;
+    double oversampling = 1;
     Mat* gkp1 = 0;
     Mat* targetfft = 0;
     Mat* fftresult = 0;
@@ -750,11 +794,11 @@ int main(int argc, char** argv )
     //cir2.r = 50;
     cir2.x0 = column/2;
     cir2.y0 = row/2;
-    cir2.r = 40;
+    cir2.r = 20;
     cir3.x0 = row/2;
     cir3.y0 = column/2;
     //cir3.r = 300/mergeDepth;
-    cir3.r = 40;
+    cir3.r = 20;
     cir4.x0 = cir2.x0;
     cir4.y0 = cir2.y0;
     cir4.r = cir3.r;
@@ -768,10 +812,16 @@ int main(int argc, char** argv )
     
 
     experimentConfig setups;
+    setups.useShrinkMap = 1;
+    ImageMask shrinkingMask;
+    shrinkingMask.threshold = 0.1;
     setups.useDM = 0;
     setups.useBS = 0;
-    setups.spt = &re;
+
+    setups.spt = &shrinkingMask;
+    //setups.spt = &re;
     //setups.spt = &cir3;
+    
     setups.beamStop = &cir;
     setups.restart = restart;
     //setups.d = oversampling*setups.pixelsize*setups.beamspotsize/setups.lambda; //distance to guarentee oversampling
@@ -798,7 +848,7 @@ int main(int argc, char** argv )
       }else{
         if(oversampling>1) cache = extend(*cache1,oversampling);
 	else cache = cache1;
-	gkp1 = convertFromOpencvToFFTW(*cache, gkp1,0,"waveFront");
+	gkp1 = convertFromIntegerToComplex(*cache, gkp1,0,"waveFront");
       }
       if(!isFarField && isFresnel){
         auto f = [&](int x, int y, fftw_complex &data){
@@ -809,13 +859,14 @@ int main(int argc, char** argv )
         imageLoop<decltype(f)>(gkp1,&f,0);
       }
       if(useGaussionLumination){
-        setups.spt = &cir3;
+        //setups.spt = &re;
+        if(!setups.useShrinkMap) setups.spt = &cir3;
         //diffraction image, either from simulation or from experiments.
         auto f = [&](int x, int y, fftw_complex &data){
           auto tmp = (complex<double>*)&data;
-          bool inside = cir2.isInside(x,y);
+          bool inside = cir3.isInside(x,y);
 	  if(!inside) *tmp = 0.;
-	  *tmp *= gaussian(x-cir2.x0,y-cir2.y0,cir2.r/2);
+	  *tmp *= gaussian(x-cir2.x0,y-cir2.y0,cir3.r);
 	  //if(cir2.isInside(x,y))printf("%f, ",gaussian(x-cir2.x0,y-cir2.y0,cir2.r/2));
 	};
         imageLoop<decltype(f)>(gkp1,&f,0);
@@ -831,17 +882,19 @@ int main(int argc, char** argv )
 	};
         imageLoop<decltype(f)>(gkp1,&f,0);
       }
-      convertFromFFTWToOpencv(gkp1, cache, MOD2,0,1,"Object MOD2");
+      convertFromComplexToInteger(gkp1, cache, MOD2,0,1,"Object MOD2");
       imwrite("init_object.png",*cache);
-      convertFromFFTWToOpencv(gkp1, cache, PHASE,0,1,"Object Phase");
+      convertFromComplexToInteger(gkp1, cache, PHASE,0,1,"Object Phase");
       imwrite("init_object_phase.png",*cache);
       targetfft = fftw(gkp1,targetfft,1); 
     }else{
       //if(mergeDepth == 1) cache = cache1;
       //else 
       cache = new Mat(row, column, format_cv);
-      //targetfft = convertFromOpencvToFFTW(*cache1,targetfft,1); 
-      targetfft = cache1;
+      if(cache1->depth() == CV_64F) 
+        targetfft = cache1;
+      else
+        targetfft = convertFromIntegerToComplex(*cache1,targetfft,1); 
     }
     if(restart){
       intensity = readImage(argv[3]);
@@ -851,10 +904,11 @@ int main(int argc, char** argv )
     }
     //cir2.x0=row/2;
     //cir2.y0=column/2;
-    double decay = 0.9;
+    double decay = scale;
     std::default_random_engine generator;
     std::poisson_distribution<int> distribution(1000);
     Mat *autocorrelation = new Mat(row,column,CV_64FC2);
+    shrinkingMask.image = new Mat(row,column,CV_64FC1);
     for(int i = 0; i<row*column; i++){ //remove the phase information
      // double randphase = arg(tmp);//static_cast<double>(rand())/RAND_MAX*2*pi;
       int tx = i/row;
@@ -867,9 +921,9 @@ int main(int argc, char** argv )
       fftw_complex &datacor = ((fftw_complex*)autocorrelation->data)[i];
       double mod = abs(data)*sqrt(decay);
       if(runSim&&simCCDbit) {
-	int range= pow(2,16);
+        int range= pow(2,16);
         mod = sqrt(((double)floor(pow(mod,2)*range))/(range)); //assuming we use 16bit CCD
-	//mod = sqrt(pow(mod,2)+double(distribution(generator))/range); //Poisson noise
+        //mod = sqrt(pow(mod,2)+double(distribution(generator))/range); //Poisson noise
       }
       if(1){
       if(setups.useBS && cir.isInside(tx,ty)) {
@@ -881,28 +935,35 @@ int main(int argc, char** argv )
         data = mod*exp(complex<double>(0,randphase));
       }
       }
-      //datacor[0] = pow(mod,2)*(tx-row/2)*(ty-column/2)/90;
-      datacor[0] = pow(mod,2);//to take the derivitave: append *(tx-row/2)*(ty-column/2)/20;
+      //datacor[0] = pow(mod,2)*(tx-row/2)*(ty-column/2)/90;//to take the derivitave: append *(tx-row/2)*(ty-column/2)/20;
+      datacor[0] = pow(mod,2); //ucore is the diffraction pattern
       datacor[1] = 0;
     }
-    convertFromFFTWToOpencv( autocorrelation, cache, MOD,1,1,"HERALDO U core");
+    convertFromComplexToInteger( autocorrelation, cache, MOD,1,1,"HERALDO U core");
     imwrite("ucore.png",*cache);
     autocorrelation = fftw(autocorrelation, autocorrelation, 0);
-    auto f = [&](int x, int y, fftw_complex &data){
-      auto tmp = (complex<double>*)&data;
-      *tmp = 1.4+*tmp;
+
+    auto f = [&](int x, int y, double &data, fftw_complex &dataout){
+      data = hypot(dataout[1],dataout[0])>shrinkingMask.threshold;
     };
+    imageLoop<decltype(f),double,fftw_complex>(shrinkingMask.image,autocorrelation,&f,1);
+    convertFromComplexToInteger<double>(shrinkingMask.image, cache,MOD,0);
+    imwrite("mask.png",*cache);
+    //auto f = [&](int x, int y, fftw_complex &data){
+    //  auto tmp = (complex<double>*)&data;
+    //  *tmp = 1.4+*tmp;
+    //};
     //imageLoop<decltype(f)>(autocorrelation,&f,0);
     if(!restart){
       fftresult = new Mat();
       targetfft->copyTo(*fftresult);
     }
-    convertFromFFTWToOpencv(targetfft, cache, PHASE,1);
+    convertFromComplexToInteger(targetfft, cache, PHASE,1);
     imwrite("init_phase.png",*cache);
-    convertFromFFTWToOpencv(targetfft, cache, MOD2,1,1,"Pattern MOD2");
+    convertFromComplexToInteger(targetfft, cache, MOD2,1,1,"Pattern MOD2");
     imwrite("init_pattern.png",*cache);
-    targetfft = convertFromOpencvToFFTW(*cache, targetfft, 1 , "waveFront");
-    convertFromFFTWToOpencv(autocorrelation, cache, MOD2,1,1,"Autocorrelation MOD2",1);
+    //targetfft = convertFromIntegerToComplex(*cache, targetfft, 1 , "waveFront");
+    convertFromComplexToInteger(autocorrelation, cache, MOD2,1,1,"Autocorrelation MOD2",1);
     imwrite("auto_correlation.png",*cache);
     //Phase retrieving starts from here. In the following, only targetfft is needed.
     if(doIteration) phaseRetrieve(setups, targetfft, gkp1, cache, fftresult); //fftresult is the starting point of the iteration

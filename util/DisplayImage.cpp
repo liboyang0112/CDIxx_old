@@ -4,8 +4,8 @@ using namespace cv;
 using namespace std;
 //using pixeltype=uint16_t;
 //auto format_cv = CV_16UC(1);
-using pixeltype=float;
-auto format_cv = CV_32FC(1);
+using pixeltype=double;
+auto format_cv = CV_64FC(1);
 //using pixeltype=char;
 //auto format_cv = CV_8UC(1);
 double gaussian(double x, double y, double sigma){
@@ -31,12 +31,12 @@ int main(int argc, char** argv )
     pixeltype* rowp;
     pixeltype* rowo;
     //char* rowo;
-    int tot = 0;
+    double tot = 0;
     double totx = 0;
     double toty = 0;
     double sumx = 0;
     double sumy = 0;
-    int max = 0;
+    double max = 0;
     for(int x = 0; x < row ; x++){
 	rowp = imagein.ptr<pixeltype>(x);
 	rowo =   image.ptr<pixeltype>(x);
@@ -60,7 +60,7 @@ int main(int argc, char** argv )
            //     rowo[y]=floor(log2(rowp[y])*pow(2,12));//log2(rowp[y])*pow(2,11);
                 //rowo[y]=n;//log2(rowp[y])*pow(2,11);
               //printf("%d, ",n);
-              printf("%f, ",rowp[y]);
+              printf("%f\n",rowp[y]);
 	    //}
 	    tot+= rowp[y];
 	    totx += double(rowp[y]);
@@ -71,7 +71,7 @@ int main(int argc, char** argv )
 	}
 	//printf("\n");
     }
-    printf("\ntot=%d,max=%d,middle=(%f,%f)\n",tot,max,sumx/totx,sumy/toty);
+    printf("\ntot=%f,max=%f,middle=(%f,%f)\n",tot,max,sumx/totx,sumy/toty);
 
 
     if ( !image.data )
