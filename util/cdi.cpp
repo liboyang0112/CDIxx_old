@@ -7,13 +7,14 @@
 # include <random>
 
 #include <stdio.h>
-#include <opencv2/opencv.hpp>
-#include "opencv2/imgproc.hpp"
-#include "opencv2/imgcodecs.hpp"
-#include "opencv2/highgui.hpp"
+#include "fftw.h"
 #include <iostream>
 #include <fstream>
 #include <libconfig.h++>
+#include "opencv2/imgproc.hpp"
+#include "opencv2/imgcodecs.hpp"
+#include "opencv2/highgui.hpp"
+
 
 
 // This example reads the configuration file 'example.cfg' and displays
@@ -26,7 +27,7 @@ static tbb::affinity_partitioner ap;
 using namespace cv;
 // Declare the variables
 using namespace std;
-static const int mergeDepth = 1;
+static const int mergeDepth = 8; //use it only when input image is integers
 #if Bits==12
 using pixeltype=uint16_t;
 static const int nbits = 12;
@@ -45,7 +46,7 @@ static const auto format_cv = CV_8UC1;
 
 static const int rcolor = pow(2,nbits);
 static bool opencv_reverted = 0;
-static const double scale = 15;
+static const double scale = 20;
 
 const double pi = 3.1415927;
 using namespace cv;
@@ -151,26 +152,6 @@ void imageLoop(Mat* data, Mat* dataout, void* arg, bool isFrequency = 0){
     }
   }
 }
-Mat* fftw ( Mat* in, Mat *out = 0, bool isforward = 1)
-{
-  fftw_plan plan_forward;
-  int row = in->rows;
-  int column = in->cols;
-  double ratio = 1./sqrt(row*column);
-  if(out == 0) out = new Mat(row,column,CV_64FC2);
-
-  plan_forward = fftw_plan_dft_2d ( row, column, (fftw_complex*)in->data, (fftw_complex*)out->data, isforward?FFTW_FORWARD:FFTW_BACKWARD, FFTW_ESTIMATE );
-
-  fftw_execute ( plan_forward );
-
-  for(int i = 0; i < out->total() ; i++){
-    ((fftw_complex*)out->data)[i][0]*=ratio;
-    ((fftw_complex*)out->data)[i][1]*=ratio;
-  } //normalization
-  fftw_destroy_plan ( plan_forward );
-
-  return out;
-}
 /******************************************************************************/
 double getVal(mode m, fftw_complex &data){
   complex<double> &tmpc = *(complex<double>*)(data);
@@ -244,17 +225,15 @@ Mat read16bitImage(Mat imagein, int nbitsimg)
     int column = imagein.cols;
     int threshold = 1;
     int factor = pow(2,16-nbitsimg);
-    Mat image(row, column, CV_16UC(1), Scalar::all(0));
+    Mat image(row/mergeDepth, column/mergeDepth, CV_16UC(1), Scalar::all(0));
     inputtype* rowp;
     uint16_t* rowo;
     int tot = 0;
     int max = 0;
     for(int x = 0; x < row ; x++){
 	rowp = imagein.ptr<inputtype>(x);
-	rowo = image.ptr<uint16_t>(x);
-	//rowo = image.ptr<char>(x);
+	rowo = image.ptr<uint16_t>(x/mergeDepth);
         for(int y = 0; y<column; y++){
-            //rowp[y] = (int)(255*gaussian(((double)x)/row-0.5,((double)y)/column-0.5,0.25));
 	    //if(rowp[y]>0) rowo[y]=rowp[y]/256;//log2(rowp[y])*pow(2,11);
 	    //int nm1 = rowp[y-1];
 	    //int np1 = rowp[y+1];
@@ -270,7 +249,7 @@ Mat read16bitImage(Mat imagein, int nbitsimg)
 	    //    else rowo[y]=n>>(inputbits-nbits);//log2(rowp[y])*pow(2,11);
 	    //  }
 	    //}
-	    rowo[y] = rowp[y]*factor;
+	    rowo[y/mergeDepth] += rowp[y]*factor/mergeDepth/mergeDepth;
 	    tot+= rowp[y];
 	    if(max < rowp[y]) max = rowp[y];
 	}
@@ -291,8 +270,10 @@ Mat readImage(char* name, bool isFrequency = 0){
    }
   }
   if(imagein.depth() == CV_8U){
+    printf("input image nbits: 8");
     return read16bitImage<char>(imagein,8);
   }else if(imagein.depth() == CV_16U){
+    printf("input image nbits: 16");
     return read16bitImage<uint16_t>(imagein,16);
   }else{  //Image data is float
     printf("Image is not recognized as integer type, Image data is treated as floats\n");
@@ -311,10 +292,9 @@ Mat readImage(char* name, bool isFrequency = 0){
 }
 
 Mat* convertFromIntegerToComplex(Mat &image, Mat* cache = 0, bool isFrequency = 0, const char* label= "default"){
-  int row = image.rows/mergeDepth*mergeDepth;
-  int column = image.cols/mergeDepth*mergeDepth;
-  if(!cache) cache = new Mat(row/mergeDepth, column/mergeDepth, CV_64FC2);
-  else if(mergeDepth!=1) *cache = Scalar(0.,0.);
+  int row = image.rows;
+  int column = image.cols;
+  if(!cache) cache = new Mat(row, column, CV_64FC2);
   double tot = 0;
   pixeltype* rowp;
   fftw_complex* rowo;
@@ -326,7 +306,7 @@ Mat* convertFromIntegerToComplex(Mat &image, Mat* cache = 0, bool isFrequency = 
       targetx = x;
     }
     rowp = image.ptr<pixeltype>(x);
-    rowo = cache->ptr<fftw_complex>(targetx/mergeDepth);
+    rowo = cache->ptr<fftw_complex>(targetx);
     for(int y = 0; y<column; y++){
       if(isFrequency){
         targety = y<column/2?y+column/2:(y-column/2);
@@ -334,13 +314,9 @@ Mat* convertFromIntegerToComplex(Mat &image, Mat* cache = 0, bool isFrequency = 
 	targety = y;
       }
       double intensity = ((double)rowp[y])/(rcolor-1);
-      fftw_complex &datatmp = rowo[targety/mergeDepth];
+      fftw_complex &datatmp = rowo[targety];
       if(opencv_reverted) intensity = 1-intensity;
-      if(mergeDepth==1) datatmp[0] = sqrt(intensity);
-      else{
-        datatmp[0] = sqrt(pow(datatmp[0],2)+intensity);
-      }
-      //cache[index][0] = sqrt(intensity);
+      datatmp[0] = sqrt(intensity);
       datatmp[1] = 0;
       tot += sqrt(intensity);
     }
@@ -399,7 +375,6 @@ void applyMod(Mat* source, Mat* target, support *bs = 0){
             if(y >= column/2) ty -= column/2;
             else ty += column/2;
             if(bs->isInside(tx,ty)) {
-              //printf("skipping %d, %d, %d\n",tx, ty, i);
               continue;
             }
           }
@@ -609,12 +584,13 @@ void phaseRetrieve( experimentConfig &setups, Mat* targetfft, Mat* gkp1 = 0, Mat
     fepS.open("epsilonS.txt",ios::out |(setups.restart? ios::app:std::ios_base::openmode(0)));
     int niters = 5000;
     int tot = row*column;
+    bool saveIter=1;
     Mat objMod(row,column,CV_64FC1);
     Mat* maskKernel;
-    double gaussianSigma = 4;
+    double gaussianSigma = 3;
     for(int iter = 0; iter < niters; iter++){
       //start iteration
-      if(iter%100==0) {
+      if(iter%100==0 && saveIter) {
         printf("Iteration Number : %d\n", iter);
         convertFromComplexToInteger( gkp1,cache, MOD2,0);
         std::string iterstr = to_string(iter);
@@ -685,7 +661,7 @@ void phaseRetrieve( experimentConfig &setups, Mat* targetfft, Mat* gkp1 = 0, Mat
 	if(gaussianSigma>1.5) gaussianSigma*=0.99;
 	delete maskKernel;
       }
-      if(updateMask&&iter%100==0){
+      if(updateMask&&iter%100==0&&saveIter){
 	convertFromComplexToInteger<double>(((ImageMask*)&re)->image, cache,MOD,0);
 	//convertFromComplexToInteger<double>(&objMod, cache,MOD,0);
         std::string iterstr = to_string(iter);
@@ -743,8 +719,6 @@ int main(int argc, char** argv )
     bool useGaussionLumination = 1;
     bool useGaussionHERALDO = 0;
     bool useRectHERALDO = 0;
-    fftw_init_threads();
-    fftw_plan_with_nthreads(3);
 
     //int seed = 1657180926;// 1657180330
     //int seed = 1657182238; // oversampling = 3, modulation range = pi, reversed image
@@ -768,8 +742,8 @@ int main(int argc, char** argv )
     Mat ele = getStructuringElement(MORPH_RECT,Size(3,3),Point(1,1));
     //erode( intensity, intensity, ele);
     //dilate( intensity, intensity, ele);
-    row = intensity.rows/mergeDepth;
-    column = intensity.cols/mergeDepth;
+    row = intensity.rows;
+    column = intensity.cols;
     pixeltype *rowp;
     if(useRectHERALDO){
       for(int i = 0; i < row ; i++){
@@ -907,7 +881,7 @@ int main(int argc, char** argv )
     double decay = scale;
     std::default_random_engine generator;
     std::poisson_distribution<int> distribution(1000);
-    Mat *autocorrelation = new Mat(row,column,CV_64FC2);
+    Mat *autocorrelation = new Mat(row,column,CV_64FC2,Scalar::all(0.));
     shrinkingMask.image = new Mat(row,column,CV_64FC1);
     for(int i = 0; i<row*column; i++){ //remove the phase information
      // double randphase = arg(tmp);//static_cast<double>(rand())/RAND_MAX*2*pi;
