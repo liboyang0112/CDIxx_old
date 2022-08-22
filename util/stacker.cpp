@@ -40,7 +40,7 @@ int main(int argc, char** argv )
         return -1;
     }
     vector<Mat> imagein;
-    int mergeDepth = 4;
+    int mergeDepth = 8;
     Mat bkg = imread(argv[1], IMREAD_UNCHANGED);
     int row = bkg.rows;
     int column = bkg.cols;
@@ -76,6 +76,7 @@ int main(int argc, char** argv )
       ratios[i] = getRatio(bkg,imagein[i],imagein[i+1]);
       maxratio*=ratios[i];
     }
+    ratios.push_back(1);
     printf("maxratio=%f\n",maxratio);
     double maxIntensity = 0;
     for(int x = 0; x < row ; x++){
@@ -84,21 +85,25 @@ int main(int argc, char** argv )
 	rowo =   image.ptr<pixeltype>(x);
 	rowf =   imagefloat.ptr<double>(x/mergeDepth);
         for(int y = 0; y<column; y++){
-	    double intensity = rowp[y]-rowb[y];
-	    if(intensity >= rcolor-1-rowb[y]){
+	    double intensity = rowp[y];
+	    if(intensity >= rcolor-1){
               double ratio = ratios[0];
               for(int i = 1;i < imagein.size(); i++){
-                intensity = imagein[i].ptr<pixeltype>(x)[y]-rowb[y];
-                if(intensity<rcolor-1-rowb[y] || i == imagein.size()-1){
-                  intensity *= ratio;
+                intensity = imagein[i].ptr<pixeltype>(x)[y];
+                if(intensity<rcolor-1){
+                  intensity = ratio*(imagein[i].ptr<pixeltype>(x)[y]-rowb[y]);
                   break;
 		}
-                else
+                else if(i != imagein.size()-1)
                   ratio*=ratios[i];
+		else{
+                  intensity = ratio*(imagein[i].ptr<pixeltype>(x)[y]);
+		}
 	      }
-	    }
+	    }else
+              intensity-=rowb[y];
 
-	    rowf[y/mergeDepth]+=intensity/rcolor/maxratio/mergeDepth/mergeDepth;
+	    rowf[y/mergeDepth]+=intensity/(rcolor-1)/maxratio/mergeDepth/mergeDepth;
 	    if(maxIntensity < rowf[y/mergeDepth]) maxIntensity = rowf[y/mergeDepth];
 
             rowo[y]=std::max(0.,floor(log2(intensity/maxratio)*pow(2,12)));//log2(rowp[y])*pow(2,11);

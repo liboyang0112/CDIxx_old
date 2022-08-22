@@ -13,6 +13,6 @@ if [ -z ${CDI_DIR+x} ] ; then
 	else
 		export LD_LIBRARY_PATH+=:$CDI_DIR/bin
 	fi
-	alias eshcd='cd $CDI_DIR'
-	alias eshmake='cd $CDI_DIR/build; make -j4; cd -'
+	alias cdicd='cd $CDI_DIR'
+	alias cdimake='cd $CDI_DIR/build; make -j4; cd -'
 fi

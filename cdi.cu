@@ -15,12 +15,43 @@
 #include "opencv2/imgcodecs.hpp"
 #include "opencv2/highgui.hpp"
 
-#include "common.h"
+#include <cuda.h>
+#include <cuda_runtime.h>
+
 
 
 // This example reads the configuration file 'example.cfg' and displays
 // some of its contents.
 //#define Bits 16
+#define Bits 16
+
+
+static tbb::affinity_partitioner ap;
+using namespace cv;
+// Declare the variables
+using namespace std;
+static const int mergeDepth = 1; //use it only when input image is integers
+#if Bits==12
+using pixeltype=uint16_t;
+static const int nbits = 12;
+static const auto format_cv = CV_16UC1;
+#elif Bits==16
+using pixeltype=uint16_t;
+static const int nbits = 16;
+static const auto format_cv = CV_16UC1;
+#else
+using pixeltype=uchar;
+static const int nbits = 8;
+static const auto format_cv = CV_8UC1;
+#endif
+//using inputtype=uchar;
+//static const int inputbits = 8;
+
+static const int rcolor = pow(2,nbits);
+static bool opencv_reverted = 0;
+static const double scale = 10;
+
+const double pi = 3.1415927;
 using namespace cv;
 double gaussian(double x, double y, double sigma){
   double r2 = pow(x,2) + pow(y,2);
@@ -190,6 +221,22 @@ Mat* convertFromComplexToInteger(Mat *fftwImage, Mat* opencvImage = 0, mode m = 
   printf("total intensity %s: %d, max: %f\n", label, tot, max);
   return opencvImage;
 }
+template<typename T=fftw_complex>
+Mat* convertFromComplexToInteger(cufftDoubleComplex *data, Mat* opencvImage = 0, mode m = MOD, bool isFrequency = 0, double decay = 1, const char* label= "default",bool islog = 0, int row, int col){
+  if(!opencvImage) {
+    row = opencvImage->rows;
+    col = opencvImage->cols;
+  }
+  if(row==col==0) printf("Error: Image dimension unknown\n");
+  Mat *fftwImage = new(row,col,CV_64FC2);
+  void* tmp = fftwImage->data;
+  fftwImage->data = (void*)data;
+  convertFromComplexToInteger(fftwImage, opencvImage,m,isFrequency, decay, label, islog);
+  fftwImage->data = tmp;
+  delete fftwImage;
+  return opencvImage;
+}
+
 template <typename inputtype>
 Mat read16bitImage(Mat imagein, int nbitsimg)
 {
@@ -328,60 +375,46 @@ Mat* convertFromIntegerToComplex(Mat &image,Mat &phase,Mat* cache = 0){
   return cache;
 }
 
-void applyMod(Mat* source, Mat* target, support *bs = 0){
+__global__ void applyMod(cufftDoubleComplex* source, cufftDoubleComplex* target, int row, int column, support *bs = 0){
   assert(source!=0);
   assert(target!=0);
   double tolerance = 0.5/rcolor*scale;
   double maximum = pow(mergeDepth,2)*scale;
-  int row = target->rows;
-  int column = target->cols;
-  parallel_for(
-    tbb::detail::d1::blocked_range<size_t>(0, row),
-    [&](const tbb::detail::d1::blocked_range<size_t> &r)
-    {
-      for (size_t x = r.begin(); x != r.end(); ++x)
-      {
-        fftw_complex* rowo,*rowp;
-        rowo = source->ptr<fftw_complex>(x);
-        rowp = target->ptr<fftw_complex>(x);
-        for(size_t y = 0; y < column; y++){
-	  if(bs!=0){
-            int tx = x;
-            if(x >= row/2) tx -= row/2;
-            else tx += row/2;
-            int ty = y;
-            if(y >= column/2) ty -= column/2;
-            else ty += column/2;
-            if(bs->isInside(tx,ty)) {
-              continue;
-            }
-          }
-          fftw_complex &targetdata = rowp[y];
-          fftw_complex &sourcedata = rowo[y];
-          double ratio = 1;
-          double mod2 = targetdata[0]*targetdata[0] + targetdata[1]*targetdata[1];
-          double srcmod2 = sourcedata[0]*sourcedata[0] + sourcedata[1]*sourcedata[1];
-          if(mod2>=maximum) {
-            mod2 = max(maximum,srcmod2);
-          }
-          if(srcmod2 == 0){
-            sourcedata[0] = sqrt(mod2);
-            sourcedata[1] = 0;
-            continue;
-          }
-          double diff = mod2-srcmod2;
-          if(diff>tolerance){
-            ratio = sqrt((mod2-tolerance)/srcmod2);
-          }else if(diff < -tolerance ){
-            ratio = sqrt((mod2+tolerance)/srcmod2);
-          }
-          sourcedata[0] *= ratio;
-          sourcedata[1] *= ratio;
-        }
-      }
-    },
-    ap
-  );
+  int x = blockIdx.x * blockDim.x + threadIdx.x;
+  int y = blockIdx.y * blockDim.y + threadIdx.y;
+  index = x + y*row;
+  if(bs!=0){
+    int tx = x;
+    if(x >= row/2) tx -= row/2;
+    else tx += row/2;
+    int ty = y;
+    if(y >= column/2) ty -= column/2;
+    else ty += column/2;
+    if(bs->isInside(tx,ty)) {
+      continue;
+    }
+  }
+  fftw_complex &targetdata = rowp[y];
+  fftw_complex &sourcedata = rowo[y];
+  double ratio = 1;
+  double mod2 = targetdata[0]*targetdata[0] + targetdata[1]*targetdata[1];
+  double srcmod2 = sourcedata[0]*sourcedata[0] + sourcedata[1]*sourcedata[1];
+  if(mod2>=maximum) {
+    mod2 = max(maximum,srcmod2);
+  }
+  if(srcmod2 == 0){
+    sourcedata[0] = sqrt(mod2);
+    sourcedata[1] = 0;
+    continue;
+  }
+  double diff = mod2-srcmod2;
+  if(diff>tolerance){
+    ratio = sqrt((mod2-tolerance)/srcmod2);
+  }else if(diff < -tolerance ){
+    ratio = sqrt((mod2+tolerance)/srcmod2);
+  }
+  sourcedata[0] *= ratio;
+  sourcedata[1] *= ratio;
 }
 Mat* createWaveFront(Mat &intensity, Mat &phase, int rows, int columns, Mat* &itptr, Mat* wavefront = 0){
   if ( !intensity.data )
@@ -536,33 +569,42 @@ struct experimentConfig{
  double beamspotsize = 50;
 };
 
-void phaseRetrieve( experimentConfig &setups, Mat* targetfft, Mat* gkp1 = 0, Mat *cache = 0, Mat* fftresult = 0 ){
-    Mat* pmpsg = 0;
+void phaseRetrieve( experimentConfig &setups, int row, int column, cufftDoubleComplex* targetfft, Mat *cache = 0, cufftDoubleComplex* fftresult = 0 ){
+    size_t sz = row*column*sizeof(cufftDoubleComplex);
     bool useShrinkMap = setups.useShrinkMap;
-    int row = targetfft->rows;
-    int column = targetfft->cols;
     bool useDM = setups.useDM;
     bool useBS = setups.useBS;
     auto &re = *(setups.spt);
     auto &cir = *(setups.beamStop);
-    if(useDM) {
-      pmpsg = new Mat();
-      fftresult->copyTo(*pmpsg);
-    }
-    Mat* gkprime = 0;
-    assert(targetfft!=0);
-    double beta = -1;
-    double beta_HIO = 0.9;
-    double gammas = -1./beta;
-    double gammam = 1./beta;
-    double epsilonS, epsilonF;
-    gkp1 = fftw(targetfft,gkp1,0); //IFFT to get O field;
     std::ofstream fepF,fepS;
     fepF.open("epsilonF.txt",ios::out |(setups.restart? ios::app:std::ios_base::openmode(0)));
     fepS.open("epsilonS.txt",ios::out |(setups.restart? ios::app:std::ios_base::openmode(0)));
     int niters = 5000;
     int tot = row*column;
     bool saveIter=1;
+
+    cufftDoubleComplex* gkp1 = 0; 
+    cufftDoubleComplex* pmpsg = 0;
+    cufftDoubleComplex* gkprime = 0;
+    Check(cudaMalloc((void**)&gkprime, sz));
+    Check(cudaMalloc((void**)&gkp1, sz));
+
+    if(useDM) {
+      Check(cudaMalloc((void**)&pmpsg, sz));
+      cudaMemcpy(pmpsg,fftresult,sz,cudaMemcpyHostToDevice);
+    }
+
+    cufftHandle plan;
+    cufftPlan2d ( plan, row, column, CUFFT_Z2Z);
+
+
+    assert(targetfft!=0);
+    double beta = -1;
+    double beta_HIO = 0.9;
+    double gammas = -1./beta;
+    double gammam = 1./beta;
+    double epsilonS, epsilonF;
+    cufftExecZ2Z(plan, targetfft, gkp1, CUFFT_INVERSE); //IFFT to get O field;
     Mat objMod(row,column,CV_64FC1);
     Mat* maskKernel;
     double gaussianSigma = 3;
@@ -715,7 +757,7 @@ int main(int argc, char** argv )
     //1657184141 // oversampling = 3, modulation range = 2pi, upright image, random phase
     srand(seed);
     printf("seed:%d\n",seed);
-    double oversampling = 1;
+    double oversampling = 5;
     Mat* gkp1 = 0;
     Mat* targetfft = 0;
     Mat* fftresult = 0;
@@ -760,7 +802,7 @@ int main(int argc, char** argv )
     cir3.x0 = row/2;
     cir3.y0 = column/2;
     //cir3.r = 300/mergeDepth;
-    cir3.r = 20;
+    cir3.r = 100;
     cir4.x0 = cir2.x0;
     cir4.y0 = cir2.y0;
     cir4.r = cir3.r;
@@ -826,8 +868,8 @@ int main(int argc, char** argv )
         //diffraction image, either from simulation or from experiments.
         auto f = [&](int x, int y, fftw_complex &data){
           auto tmp = (complex<double>*)&data;
-          bool inside = cir3.isInside(x,y);
-	  if(!inside) *tmp = 0.;
+          //bool inside = cir3.isInside(x,y);
+	  //if(!inside) *tmp = 0.;
 	  *tmp *= gaussian(x-cir2.x0,y-cir2.y0,cir3.r);
 	  //if(cir2.isInside(x,y))printf("%f, ",gaussian(x-cir2.x0,y-cir2.y0,cir2.r/2));
 	};
@@ -867,7 +909,7 @@ int main(int argc, char** argv )
     //cir2.x0=row/2;
     //cir2.y0=column/2;
     double decay = scale;
-    if(runSim) decay=1;
+    if(runSim) decay*=0.05;
     std::default_random_engine generator;
     std::poisson_distribution<int> distribution(1000);
     Mat *autocorrelation = new Mat(row,column,CV_64FC2,Scalar::all(0.));
