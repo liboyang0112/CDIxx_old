@@ -25,14 +25,15 @@ using std::chrono::milliseconds;
 using std::chrono::seconds;
 using std::chrono::system_clock;
 
-// This example reads the configuration file 'example.cfg' and displays
-// some of its contents.
 //#define Bits 16
+const dim3 threadsPerBlock(16,16);
 __device__ __constant__ double cuda_beta_HIO;
 __device__ __constant__ int cuda_row;
 __device__ __constant__ int cuda_column;
 __device__ __constant__ int cuda_rcolor;
 __device__ __constant__ double cuda_scale;
+__device__ __constant__ int cuda_totalIntensity;
+cufftHandle *plan = new cufftHandle();
 using namespace cv;
 double gaussian(double x, double y, double sigma){
   double r2 = pow(x,2) + pow(y,2);
@@ -87,30 +88,44 @@ public:
     return true;
   }
 };
-class rect : public support{
+class rect{
 public:
   int startx;
   int starty;
   int endx;
   int endy;
-  rect():support(){};
   __device__ __host__ bool isInside(int x, int y){
     if(x > startx && x <= endx && y > starty && y <= endy) return true;
     return false;
   }
 };
-class C_circle : public support{
+class C_circle{
 public:
   int x0;
   int y0;
   double r;
-  C_circle():support(){};
   __device__ __host__ bool isInside(int x, int y){
     double dr = sqrt(pow(x-x0,2)+pow(y-y0,2));
     if(dr < r) return true;
     return false;
   }
 };
+
+template <typename sptType>
+__global__ void createMask(double* data, sptType* spt, bool isFrequency=0){
+  int x = blockIdx.x * blockDim.x + threadIdx.x;
+  int y = blockIdx.y * blockDim.y + threadIdx.y;
+  if(x >= cuda_row || y >= cuda_column) return;
+  int index = x + y*cuda_row;
+  if(isFrequency){
+    if(x>=cuda_row/2) x-=cuda_row/2;
+    else x+=cuda_row/2;
+    if(y>=cuda_column/2) y-=cuda_column/2;
+    else y+=cuda_column/2;
+  }
+  data[index]=spt->isInside(x,y);
+}
+
 template<typename functor, typename format=fftw_complex>
 void imageLoop(Mat* data, void* arg, bool isFrequency = 0){
   int row = data->rows;
@@ -186,7 +201,7 @@ Mat* convertFromComplexToInteger(Mat *fftwImage, Mat* opencvImage = 0, mode m = 
   int row = fftwImage->rows;
   int column = fftwImage->cols;
   if(!opencvImage) opencvImage = new Mat(row,column,format_cv);
-  int tot = 0;
+  double tot = 0;
   double max = 0;
   for(int x = 0; x < row ; x++){
     int targetx = x;
@@ -205,7 +220,7 @@ Mat* convertFromComplexToInteger(Mat *fftwImage, Mat* opencvImage = 0, mode m = 
       }
       else target*=rcolor*decay;
 
-      tot += (int)target;
+      tot += target;
       if(target>=rcolor) {
 	      //printf("larger than maximum of %s png %f\n",label, target);
 	      target=rcolor-1;
@@ -218,7 +233,7 @@ Mat* convertFromComplexToInteger(Mat *fftwImage, Mat* opencvImage = 0, mode m = 
       //rowp[targety] = rcolor - 1 - rowp[targety];
     }
   }
-  printf("total intensity %s: %d, max: %f\n", label, tot, max);
+  printf("total intensity %s: %4.2e, max: %f\n", label, tot, max);
   return opencvImage;
 }
 template <typename inputtype>
@@ -362,18 +377,20 @@ Mat* convertFromIntegerToComplex(Mat &image,Mat &phase,Mat* cache = 0){
 __global__ void applyNorm(cufftDoubleComplex* data){
   int x = blockIdx.x * blockDim.x + threadIdx.x;
   int y = blockIdx.y * blockDim.y + threadIdx.y;
+  if(x >= cuda_row || y >= cuda_column) return;
   int index = x + y*cuda_row;
   data[index].x*=1./sqrtf(cuda_row*cuda_column);
   data[index].y*=1./sqrtf(cuda_row*cuda_column);
 }
 
-__global__ void applyMod(cufftDoubleComplex* source, cufftDoubleComplex* target, ImageMask *bs = 0){
+__global__ void applyMod(cufftDoubleComplex* source, cufftDoubleComplex* target, ImageMask *bs = 0, bool loose=0){
   assert(source!=0);
   assert(target!=0);
   double tolerance = 0.5/cuda_rcolor*cuda_scale;
   double maximum = pow(mergeDepth,2)*cuda_scale;
   int x = blockIdx.x * blockDim.x + threadIdx.x;
   int y = blockIdx.y * blockDim.y + threadIdx.y;
+  if(x >= cuda_row || y >= cuda_column) return;
   int index = x + y*cuda_row;
   /*
   if(bs!=0){
@@ -394,9 +411,10 @@ __global__ void applyMod(cufftDoubleComplex* source, cufftDoubleComplex* target,
   double ratioy = 1;
   double mod2 = targetdata.x*targetdata.x + targetdata.y*targetdata.y;
   double srcmod2 = sourcedata.x*sourcedata.x + sourcedata.y*sourcedata.y;
-  //if(mod2>=maximum) {
-  //  mod2 = max(maximum,srcmod2);
-  //}
+  if(mod2>=maximum) {
+    if(loose) mod2 = max(maximum,srcmod2);
+    else tolerance*=1000;
+  }
   double diff = mod2-srcmod2;
   if(diff>tolerance){
     ratioy=ratiox = sqrt((mod2-tolerance)/srcmod2);
@@ -569,6 +587,7 @@ __global__ void applySupport(cufftDoubleComplex *gkp1, cufftDoubleComplex *gkpri
   int x = blockIdx.x * blockDim.x + threadIdx.x;
   int y = blockIdx.y * blockDim.y + threadIdx.y;
   int index = x + y*cuda_row;
+  if(x >= cuda_row || y >= cuda_column) return;
 
   //epsilonF+=hypot(gkp1data[0]-gkprimedata[0],gkp1data[1]-gkprimedata[1]);
   //fftw_complex tmp = {gkp1data[0],gkp1data[1]};
@@ -614,10 +633,6 @@ void phaseRetrieve( experimentConfig &setups, Mat* targetfft, Mat* gkp1 = 0, Mat
     double beta = -1;
     double beta_HIO = 0.9;
     cudaMemcpyToSymbol(cuda_beta_HIO,&beta_HIO,sizeof(beta_HIO));
-    cudaMemcpyToSymbol(cuda_row,&row,sizeof(row));
-    cudaMemcpyToSymbol(cuda_column,&column,sizeof(column));
-    cudaMemcpyToSymbol(cuda_rcolor,&rcolor,sizeof(rcolor));
-    cudaMemcpyToSymbol(cuda_scale,&scale,sizeof(scale));
     double gammas = -1./beta;
     double gammam = 1./beta;
     double epsilonS, epsilonF;
@@ -630,10 +645,6 @@ void phaseRetrieve( experimentConfig &setups, Mat* targetfft, Mat* gkp1 = 0, Mat
     Mat objMod(row,column,CV_64FC1);
     Mat* maskKernel;
     double gaussianSigma = 3;
-
-    cufftHandle *plan;
-    plan = new cufftHandle();
-    cufftPlan2d ( plan, row, column, CUFFT_Z2Z);
 
     size_t sz = row*column*sizeof(cufftDoubleComplex);
     cufftDoubleComplex *cuda_fftresult, *cuda_targetfft, *cuda_gkprime, *cuda_gkp1, *cuda_pmpsg;
@@ -649,8 +660,8 @@ void phaseRetrieve( experimentConfig &setups, Mat* targetfft, Mat* gkp1 = 0, Mat
     cudaMemcpy(cuda_targetfft, targetfft->data, sz, cudaMemcpyHostToDevice);
     cudaMemcpy(cuda_fftresult, fftresult->data, sz, cudaMemcpyHostToDevice);
 
-    dim3 threadsPerBlock(16,16);
-    dim3 numBlocks(row/threadsPerBlock.x, column/threadsPerBlock.y);
+    dim3 numBlocks((row-1)/threadsPerBlock.x+1, (column-1)/threadsPerBlock.y+1);
+    //dim3 numBlocks(row/threadsPerBlock.x, column/threadsPerBlock.y);
 
     cufftExecZ2Z( *plan, cuda_targetfft, cuda_gkp1, CUFFT_INVERSE);
     applyNorm<<<numBlocks,threadsPerBlock>>>(cuda_gkp1);
@@ -662,21 +673,30 @@ void phaseRetrieve( experimentConfig &setups, Mat* targetfft, Mat* gkp1 = 0, Mat
     std::chrono::duration<int64_t, std::nano> time_norm(0);
     for(int iter = 0; iter < niters; iter++){
       //start iteration
-      if(iter%100==0 && saveIter) {
-        cudaMemcpy(gkp1->data, cuda_gkp1, sz, cudaMemcpyDeviceToHost);
-        printf("Iteration Number : %d\n", iter);
-        convertFromComplexToInteger( gkp1,cache, MOD2,0);
-        std::string iterstr = to_string(iter);
-        imwrite("recon_intensity"+iterstr+".png",*cache);
-        convertFromComplexToInteger( gkp1,cache, PHASE,0);
-        imwrite("recon_phase"+iterstr+".png",*cache);
+      if(iter%100==0) {
+	long tot = time_FFT.count()+time_norm.count()+time_support.count()+time_applyMod.count();
+	if(tot!=0)
+	printf("iter: %d, timing:\n  FFT:%ld, %4.2f%%\n  NORM:%ld, %4.2f%%\n  Support:%ld, %4.2f%%\n  applyMod:%ld, %4.2f%%\n",iter, 
+	  time_FFT.count(),     ((double)time_FFT.count())/tot*100,
+	  time_norm.count(),    ((double)time_norm.count())/tot*100,
+	  time_support.count(), ((double)time_support.count())/tot*100,
+	  time_applyMod.count(),((double)time_applyMod.count())/tot*100
+        );
+	if(saveIter){
+          cudaMemcpy(gkp1->data, cuda_gkp1, sz, cudaMemcpyDeviceToHost);
+          convertFromComplexToInteger( gkp1,cache, MOD2,0);
+          std::string iterstr = to_string(iter);
+          imwrite("recon_intensity"+iterstr+".png",*cache);
+          convertFromComplexToInteger( gkp1,cache, PHASE,0);
+          imwrite("recon_phase"+iterstr+".png",*cache);
+	}
       }
       now = std::chrono::high_resolution_clock::now();
-      if(useBS) applyMod<<<numBlocks,threadsPerBlock>>>(cuda_fftresult,cuda_targetfft,&cir);  //apply mod to fftresult, Pm
-      else applyMod<<<numBlocks,threadsPerBlock>>>(cuda_fftresult,cuda_targetfft);  //apply mod to fftresult, Pm
+      if(useBS) applyMod<<<numBlocks,threadsPerBlock>>>(cuda_fftresult,cuda_targetfft,&cir, iter > 1000);  //apply mod to fftresult, Pm
+      else applyMod<<<numBlocks,threadsPerBlock>>>(cuda_fftresult,cuda_targetfft,0, iter > 1000);  //apply mod to fftresult, Pm
       if(useDM) {
-        if(useBS) applyMod<<<numBlocks,threadsPerBlock>>>(cuda_pmpsg,cuda_targetfft,&cir);  
-        else applyMod<<<numBlocks,threadsPerBlock>>>(cuda_pmpsg,cuda_targetfft);
+        if(useBS) applyMod<<<numBlocks,threadsPerBlock>>>(cuda_pmpsg,cuda_targetfft,&cir, iter > 1000);  
+        else applyMod<<<numBlocks,threadsPerBlock>>>(cuda_pmpsg,cuda_targetfft,0,iter > 1000);
       }
       //cudaDeviceSynchronize();
       time_applyMod+=std::chrono::high_resolution_clock::now()-now;
@@ -749,15 +769,6 @@ void phaseRetrieve( experimentConfig &setups, Mat* targetfft, Mat* gkp1 = 0, Mat
         applyNorm<<<numBlocks,threadsPerBlock>>>(cuda_pmpsg);
         cudaDeviceSynchronize();
       }
-      if(iter%100==0) {
-	      long tot = time_FFT.count()+time_norm.count()+time_support.count()+time_applyMod.count();
-	      printf("iter: %d, timing:\n  FFT:%ld, %f\n  NORM:%ld, %f\n  Support:%ld, %f\n  applyMod:%ld, %f\n",iter, 
-			      time_FFT.count(),     ((double)time_FFT.count())/tot*100,
-			      time_norm.count(),    ((double)time_norm.count())/tot*100,
-			      time_support.count(), ((double)time_support.count())/tot*100,
-			      time_applyMod.count(),((double)time_applyMod.count())/tot*100
-              );
-      }
       //end iteration
     }
     fepF.close();
@@ -775,17 +786,130 @@ void phaseRetrieve( experimentConfig &setups, Mat* targetfft, Mat* gkp1 = 0, Mat
     convertFromComplexToInteger( fftresult, cache, MOD2,1);
     imwrite("recon_pattern.png",*cache);
 }
-/*
-void autoCorrelationConstrain(Mat* pattern, support spt){
-  Mat* autocorrelation = 0;
-  for(int i = 0; i < 1000; i++){
-    autocorrelation = fftw(pattern, autocorrelation, 0);
-    for(int x = 0; x <pattern->row ; x++){
-      patter->ptr
-      spt.isInside(x,y);
-    }
+
+__global__ void applyAutoCorrelationMod(cufftDoubleComplex* source,cufftDoubleComplex* target){
+  int x = blockIdx.x * blockDim.x + threadIdx.x;
+  int y = blockIdx.y * blockDim.y + threadIdx.y;
+  if(x >= cuda_row || y >= cuda_column) return;
+  int index = x + y*cuda_row;
+  double targetdata = target[index].x;
+  double retval = targetdata;
+  source[index].y = 0;
+  double maximum = pow(mergeDepth,2)*cuda_scale;
+  double sourcedata = source[index].x;
+  double tolerance = 0.5/cuda_rcolor*cuda_scale;
+  double diff = sourcedata-targetdata;
+  if(diff>tolerance){
+    retval = targetdata-tolerance;
+  }else if(diff < -tolerance ){
+    retval = targetdata+tolerance;
+  }else{
+    retval = targetdata;
+  }
+  if(targetdata>=maximum) {
+    retval = max(sourcedata,maximum);
+  }
+  source[index].x = retval;
 }
-*/
+
+template <typename sptType>
+__global__ void applyERACSupport(cufftDoubleComplex* data,cufftDoubleComplex* prime,sptType *spt, double* objMod){
+  int x = blockIdx.x * blockDim.x + threadIdx.x;
+  int y = blockIdx.y * blockDim.y + threadIdx.y;
+  if(x >= cuda_row || y >= cuda_column) return;
+  int index = x + y*cuda_row;
+  if(!spt->isInside(x,y)){
+    data[index].x = 0;
+    data[index].y = 0;
+  }
+  else{
+    data[index].x = prime[index].x;
+    data[index].y = prime[index].y;
+  }
+  objMod[index] = cuCabs(data[index]);
+}
+
+template <typename sptType>
+__global__ void applyHIOACSupport(cufftDoubleComplex* data,cufftDoubleComplex* prime, sptType *spt, double *objMod){
+  int x = blockIdx.x * blockDim.x + threadIdx.x;
+  int y = blockIdx.y * blockDim.y + threadIdx.y;
+  if(x >= cuda_row || y >= cuda_column) return;
+  int index = x + y*cuda_row;
+  if(!spt->isInside(x,y)){
+    data[index].x -= prime[index].x;
+    data[index].y -= prime[index].y;
+  }
+  else{
+    data[index].x = prime[index].x;
+    data[index].y = prime[index].y;
+  }
+  objMod[index] = cuCabs(data[index]);
+}
+
+template <typename sptType>
+void autoCorrelationConstrain(Mat* pattern, sptType *spt, Mat* cache){
+  double totalIntensity = 1000;
+  cudaMemcpyToSymbol(cuda_totalIntensity,&totalIntensity,sizeof(totalIntensity));
+  dim3 numBlocks((pattern->rows-1)/threadsPerBlock.x+1, (pattern->cols-1)/threadsPerBlock.y+1);
+  cufftDoubleComplex *autocorrelation, *cuda_pattern, *autoprime;
+  ImageMask autoCorrelationMask;
+  ImageMask *cuda_Mask;
+  autoCorrelationMask.init_image(new Mat(pattern->rows,pattern->cols,CV_64FC1));
+  autoCorrelationMask.threshold = 0.008;
+  sptType *cuda_spt;
+  size_t sz = pattern->total()*sizeof(cufftDoubleComplex);
+  double *cuda_objMod;
+  cudaMalloc((void**)&cuda_objMod, sz/2);
+  cudaMalloc((void**)&autocorrelation,sz);
+  cudaMalloc((void**)&autoprime,sz);
+  cudaMalloc((void**)&cuda_pattern,sz);
+  cudaMalloc((void**)&cuda_spt,sizeof(sptType));
+  cudaMalloc((void**)&cuda_Mask,sizeof(ImageMask));
+  cudaMemcpy(cuda_pattern, pattern->data, sz, cudaMemcpyHostToDevice);
+  cudaMemcpy(cuda_spt, spt, sizeof(sptType), cudaMemcpyHostToDevice);
+  cudaMemcpy(cuda_Mask, &autoCorrelationMask, sizeof(ImageMask), cudaMemcpyHostToDevice);
+  createMask<sptType><<<numBlocks,threadsPerBlock>>>(autoCorrelationMask.data, cuda_spt,1);
+
+  autoCorrelationMask.cpyFromGM();
+  convertFromComplexToInteger<double>(autoCorrelationMask.image, cache,MOD, 1);
+  imwrite("autoCorrelationMask.png",*cache);
+  cufftExecZ2Z(*plan,cuda_pattern,autocorrelation,CUFFT_INVERSE);
+  applyNorm<<<numBlocks,threadsPerBlock>>>(autocorrelation);
+  cudaMemcpy(pattern->data, autocorrelation, sz, cudaMemcpyDeviceToHost);
+  cudaMemcpy(pattern->data, autoprime, sz, cudaMemcpyDeviceToHost);
+  convertFromComplexToInteger(pattern, cache, REAL, 1);
+  imwrite("initAC.png",*cache);
+  double gaussianSigma=3;
+  Mat* maskKernel;
+  for(int iter = 0; iter < 5000; iter++){
+    bool updateMask = iter%20==0 && iter>2000;
+    if(iter<4500) applyHIOACSupport<<<numBlocks,threadsPerBlock>>>(autocorrelation, autoprime, cuda_Mask, cuda_objMod);
+    else applyERACSupport<<<numBlocks,threadsPerBlock>>>(autocorrelation, autoprime, cuda_Mask, cuda_objMod);
+    cufftExecZ2Z(*plan,autocorrelation,autoprime,CUFFT_FORWARD);
+    applyNorm<<<numBlocks,threadsPerBlock>>>(autoprime);
+    applyAutoCorrelationMod<<<numBlocks,threadsPerBlock>>>(autoprime, cuda_pattern);
+    cufftExecZ2Z(*plan,autoprime,autoprime,CUFFT_INVERSE);
+    applyNorm<<<numBlocks,threadsPerBlock>>>(autoprime);
+    if(updateMask){
+      int size = floor(gaussianSigma*6); // r=3 sigma to ensure the contribution is negligible (0.01 of the maximum)
+      size = size/2*2+1; //ensure odd
+      maskKernel = gaussianKernel(size,size,gaussianSigma);
+      cudaMemcpy(autoCorrelationMask.image->data, cuda_objMod, sz/2, cudaMemcpyDeviceToHost);
+      filter2D(*autoCorrelationMask.image, *autoCorrelationMask.image,autoCorrelationMask.image->depth(),*maskKernel);
+      autoCorrelationMask.cpyToGM();
+      if(gaussianSigma>1.5) gaussianSigma*=0.99;
+      delete maskKernel;
+    }
+  }
+  cudaFree(cuda_pattern);
+  cudaFree(cuda_spt);
+  cudaFree(cuda_Mask);
+  cudaFree(autocorrelation);
+  cudaMemcpy(pattern->data, autoprime, sz, cudaMemcpyDeviceToHost);
+  cudaFree(autoprime);
+  convertFromComplexToInteger(pattern, cache, REAL, 1);
+  imwrite("accorrected.png",*cache);
+}
 
 int main(int argc, char** argv )
 {
@@ -805,6 +929,8 @@ int main(int argc, char** argv )
     }else{
       runSim = 0;
     }
+
+
     auto seed = (unsigned)time(NULL);
     bool isFresnel = 0;
     bool doIteration = 1;
@@ -819,7 +945,7 @@ int main(int argc, char** argv )
     //1657184141 // oversampling = 3, modulation range = 2pi, upright image, random phase
     srand(seed);
     printf("seed:%d\n",seed);
-    double oversampling = 2;
+    double oversampling = 5;
     Mat* gkp1 = 0;
     Mat* targetfft = 0;
     Mat* fftresult = 0;
@@ -851,7 +977,15 @@ int main(int argc, char** argv )
 	    row*=oversampling;
 	    column*=oversampling;
     }
-    C_circle cir,cir2,cir3,cir4;
+    cudaMemcpyToSymbol(cuda_row,&row,sizeof(row));
+    cudaMemcpyToSymbol(cuda_column,&column,sizeof(column));
+    cudaMemcpyToSymbol(cuda_rcolor,&rcolor,sizeof(rcolor));
+    //double tmp = scale*10;
+    cudaMemcpyToSymbol(cuda_scale,&scale,sizeof(scale));
+
+    cufftPlan2d ( plan, row, column, CUFFT_Z2Z);
+
+    C_circle cir,cir2,cir3;
     cir.x0=row/2;
     cir.y0=column/2;
     cir.r=10;
@@ -865,12 +999,9 @@ int main(int argc, char** argv )
     cir3.y0 = column/2;
     //cir3.r = 300/mergeDepth;
     cir3.r = 40;
-    cir4.x0 = cir2.x0;
-    cir4.y0 = cir2.y0;
-    cir4.r = cir3.r;
     rect re;
-    re.startx = (oversampling-1)/2*row/oversampling;
-    re.starty = (oversampling-1)/2*column/oversampling;
+    re.startx = (oversampling-2)/2*row/oversampling-10;
+    re.starty = (oversampling-2)/2*column/oversampling-10;
     //re.startx = 1./4*row;
     //re.starty = 1./4*column;
     re.endx = row-re.startx;
@@ -977,12 +1108,6 @@ int main(int argc, char** argv )
     shrinkingMask.init_image(new Mat(row,column,CV_64FC1));
     for(int i = 0; i<row*column; i++){ //remove the phase information
      // double randphase = arg(tmp);//static_cast<double>(rand())/RAND_MAX*2*pi;
-      int tx = i/row;
-      if(tx >= row/2) tx -= row/2;
-      if(i/row < row/2) tx += row/2;
-      int ty = i%row;
-      if(ty >= column/2) ty -= column/2;
-      if(i%row < column/2) ty += column/2;
       complex<double> &data = *(complex<double>*)((fftw_complex*)targetfft->data)[i];
       fftw_complex &datacor = ((fftw_complex*)autocorrelation->data)[i];
       double mod = abs(data)*sqrt(decay);
@@ -992,14 +1117,22 @@ int main(int argc, char** argv )
         //mod = sqrt(pow(mod,2)+double(distribution(generator))/range); //Poisson noise
       }
       if(1){
-      if(setups.useBS && cir.isInside(tx,ty)) {
-        data = 0.;
-      }
-      else{
-        //complex<double> tmp(targetfft[i][0],targetfft[i][1]);
-        double randphase = static_cast<double>(rand())/RAND_MAX*2*pi;
-        data = mod*exp(complex<double>(0,randphase));
-      }
+        if(setups.useBS){
+          int tx = i/row;
+          if(tx >= row/2) tx -= row/2;
+          else tx += row/2;
+          int ty = i%row;
+          if(ty >= column/2) ty -= column/2;
+          else ty += column/2;
+          if(cir.isInside(tx,ty)) {
+            data = 0.;
+	  }
+        }
+        else{
+          //complex<double> tmp(targetfft[i][0],targetfft[i][1]);
+          double randphase = static_cast<double>(rand())/RAND_MAX*2*pi;
+          data = mod*exp(complex<double>(0,randphase));
+        }
       }
       //datacor[0] = pow(mod,2)*(tx-row/2)*(ty-column/2)/90; // ucore is the derivitaves of the diffraction pattern: append *(tx-row/2)*(ty-column/2)/20;
       datacor[0] = pow(mod,2); //ucore is the diffraction pattern
@@ -1007,8 +1140,16 @@ int main(int argc, char** argv )
     }
     convertFromComplexToInteger( autocorrelation, cache, MOD,1,1,"HERALDO U core"); 
     imwrite("ucore.png",*cache);
-    autocorrelation = fftw(autocorrelation, autocorrelation, 0);
-    //autoCorrelationReconstruction(autocorrelation);
+    if(runSim) autocorrelation = fftw(autocorrelation, autocorrelation, 0);
+    else {
+      autoCorrelationConstrain(autocorrelation, &re, cache);
+      fftw(autocorrelation, targetfft, 1);
+      auto f =  [&](int x, int y, fftw_complex &data){
+	data[0] = sqrt(max(data[0],0.));
+	data[1] = 0;
+      };
+      imageLoop<decltype(f)>(targetfft, &f, 0);
+    }
 
     auto f = [&](int x, int y, double &data, fftw_complex &dataout){
       data = hypot(dataout[1],dataout[0])>shrinkingMask.threshold;
@@ -1030,8 +1171,8 @@ int main(int argc, char** argv )
     imwrite("init_phase.png",*cache);
     convertFromComplexToInteger(targetfft, cache, MOD2,1,1,"Pattern MOD2");
     imwrite("init_pattern.png",*cache);
-    if(runSim) targetfft = convertFromIntegerToComplex(*cache, targetfft, 1 , "waveFront");
-    convertFromComplexToInteger(autocorrelation, cache, MOD2,1,1,"Autocorrelation MOD2",1);
+    //if(runSim) targetfft = convertFromIntegerToComplex(*cache, targetfft, 1 , "waveFront");
+    convertFromComplexToInteger(autocorrelation, cache, MOD,1,1,"Autocorrelation MOD2",1);
     imwrite("auto_correlation.png",*cache);
     //Phase retrieving starts from here. In the following, only targetfft is needed.
     if(doIteration) phaseRetrieve(setups, targetfft, gkp1, cache, fftresult); //fftresult is the starting point of the iteration

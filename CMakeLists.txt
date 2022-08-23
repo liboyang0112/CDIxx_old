@@ -26,7 +26,7 @@ endforeach( sourcefile ${APP_SOURCES} )
 
 
 if(CUDA_FOUND AND ENABLE_CUDA)
-	set(CMAKE_CUDA_FLAGS "${CMAKE_CUDA_FLAGS} -arch compute_35")
+	set(CMAKE_CUDA_FLAGS "${CMAKE_CUDA_FLAGS} -arch compute_35 -Wno-deprecated-gpu-targets")
 	message(${CUDA_INCLUDE_DIRS})
     	enable_language(CUDA)
 	list(APPEND Alllibs cufft)

@@ -21,22 +21,6 @@ double gaussian(double x, double y, double sigma){
     return 1./sqrt(2*pi*sigma)*exp(-r2/2/pow(sigma,2));
 }
 
-template<typename T>
-T sqrsum(int cnt, T val){
-  cnt++;
-  return val*val;
-}
-template<typename T, typename... Ts>
-T sqrsum(int &cnt, T val, Ts... vals){
-  cnt++;
-  return val*val+sqrsum(cnt,vals...);
-}
-template<typename... Ts>
-double rms(Ts... vals){
-  int n = 0;
-  double sum = sqrsum(n, vals...);
-  return sqrt(sum/n);
-}
 enum mode {MOD2,MOD, REAL, IMAG, PHASE};
 /******************************************************************************/
 
@@ -126,7 +110,7 @@ void applyPhase(fftw_complex* source, fftw_complex* target, int row, int column)
   assert(source!=0);
   assert(target!=0);
   for(int i = 0; i < row*column ; i++){
-    double mod = rms(target[i][0],target[i][1]);
+    double mod = hypot(target[i][0],target[i][1]);
     double phase;
     complex<double> tmpc(source[i][0],source[i][1]);
     phase = std::arg(tmpc);
