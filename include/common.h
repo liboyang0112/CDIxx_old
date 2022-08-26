@@ -1,6 +1,5 @@
 #define Bits 16
 
-static tbb::affinity_partitioner ap;
 using namespace cv;
 // Declare the variables
 using namespace std;

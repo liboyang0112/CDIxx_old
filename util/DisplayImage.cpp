@@ -27,7 +27,8 @@ int main(int argc, char** argv )
 //    int row = 1000;
 //    int column = 1000;
     Mat image (row, column, format_cv, Scalar::all(0));
-    //cout << imagein<<endl;
+    cout << imagein<<endl;
+    /*j
     pixeltype* rowp;
     pixeltype* rowo;
     //char* rowo;
@@ -80,6 +81,7 @@ int main(int argc, char** argv )
         return -1;
     }
     //namedWindow("Display Image", WINDOW_FREERATIO );
-    imwrite("logimage.png", image);
+    */
+    imwrite("image.png", imagein);
     return 0;
 }

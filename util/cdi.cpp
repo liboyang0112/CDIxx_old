@@ -17,6 +17,7 @@
 
 #include "common.h"
 
+static tbb::affinity_partitioner ap;
 
 // This example reads the configuration file 'example.cfg' and displays
 // some of its contents.
@@ -715,7 +716,7 @@ int main(int argc, char** argv )
     //1657184141 // oversampling = 3, modulation range = 2pi, upright image, random phase
     srand(seed);
     printf("seed:%d\n",seed);
-    double oversampling = 1;
+    double oversampling = 3;
     Mat* gkp1 = 0;
     Mat* targetfft = 0;
     Mat* fftresult = 0;

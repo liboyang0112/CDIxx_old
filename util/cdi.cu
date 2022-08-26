@@ -300,13 +300,13 @@ Mat readImage(char* name, bool isFrequency = 0){
     printf("input image nbits: 16");
     return read16bitImage<uint16_t>(imagein,16);
   }else{  //Image data is float
-    printf("Image is not recognized as integer type, Image data is treated as floats\n");
+    printf("Image depth %d is not recognized as integer type (%d or %d), Image data is treated as floats\n", imagein.depth(), CV_8U, CV_16U);
     Mat *tmp = convertFromComplexToInteger<double>(&imagein,0,MOD,0,1,"input",1); //Here we save the logarithm of the input image
     imwrite("inputs.png", *tmp);
     delete tmp;
     Mat image(imagein.rows, imagein.cols, CV_64FC2);
     auto f = [&](int x, int y, double &data, fftw_complex &dataout){
-      dataout[0] = max(0.,sqrt(data));
+      dataout[0] = sqrt(max(0.,data));
       dataout[1] = 0;
     };
     imageLoop<decltype(f),double,fftw_complex>(&imagein,&image,&f,1);
@@ -387,7 +387,7 @@ __global__ void applyMod(cufftDoubleComplex* source, cufftDoubleComplex* target,
   assert(source!=0);
   assert(target!=0);
   double tolerance = 0.5/cuda_rcolor*cuda_scale;
-  double maximum = pow(mergeDepth,2)*cuda_scale;
+  double maximum = pow(mergeDepth,2)*cuda_scale*0.99;
   int x = blockIdx.x * blockDim.x + threadIdx.x;
   int y = blockIdx.y * blockDim.y + threadIdx.y;
   if(x >= cuda_row || y >= cuda_column) return;
@@ -795,7 +795,7 @@ __global__ void applyAutoCorrelationMod(cufftDoubleComplex* source,cufftDoubleCo
   double targetdata = target[index].x;
   double retval = targetdata;
   source[index].y = 0;
-  double maximum = pow(mergeDepth,2)*cuda_scale;
+  double maximum = pow(mergeDepth,2)*cuda_scale*0.99;
   double sourcedata = source[index].x;
   double tolerance = 0.5/cuda_rcolor*cuda_scale;
   double diff = sourcedata-targetdata;
@@ -876,7 +876,6 @@ void autoCorrelationConstrain(Mat* pattern, sptType *spt, Mat* cache){
   cufftExecZ2Z(*plan,cuda_pattern,autocorrelation,CUFFT_INVERSE);
   applyNorm<<<numBlocks,threadsPerBlock>>>(autocorrelation);
   cudaMemcpy(pattern->data, autocorrelation, sz, cudaMemcpyDeviceToHost);
-  cudaMemcpy(pattern->data, autoprime, sz, cudaMemcpyDeviceToHost);
   convertFromComplexToInteger(pattern, cache, REAL, 1);
   imwrite("initAC.png",*cache);
   double gaussianSigma=3;
