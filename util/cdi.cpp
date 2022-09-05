@@ -16,6 +16,7 @@
 #include "opencv2/highgui.hpp"
 
 #include "common.h"
+#include "imageReader.h"
 
 static tbb::affinity_partitioner ap;
 
@@ -32,7 +33,6 @@ double gaussian_norm(double x, double y, double sigma){
   return 1./(2*pi*sigma*sigma)*gaussian(x,y,sigma);
 }
 
-enum mode {MOD2,MOD, REAL, IMAG, PHASE};
 /******************************************************************************/
 
 void maskOperation(Mat &input, Mat &output, Mat &kernel){
@@ -81,23 +81,6 @@ public:
     return false;
   }
 };
-template<typename functor, typename format=fftw_complex>
-void imageLoop(Mat* data, void* arg, bool isFrequency = 0){
-  int row = data->rows;
-  int column = data->cols;
-  format *rowp;
-  functor* func = static_cast<functor*>(arg);
-  for(int x = 0; x < row ; x++){
-    int targetx = x;
-    if(isFrequency) targetx = x<row/2?x+row/2:(x-row/2);
-    rowp = data->ptr<format>(x);
-    for(int y = 0; y<column; y++){
-      int targety = y;
-      if(isFrequency) targety = y<column/2?y+column/2:(y-column/2);
-      (*func)(targetx, targety , rowp[y]);
-    }
-  }
-}
 Mat* gaussianKernel(int rows, int cols, double sigma){
   Mat* image = new Mat(rows, cols, CV_64FC1);
   auto f = [&](int x, int y, double &data){
@@ -105,228 +88,6 @@ Mat* gaussianKernel(int rows, int cols, double sigma){
   };
   imageLoop<decltype(f), double>(image,&f);
   return image;
-}
-template<typename functor, typename format1, typename format2>
-void imageLoop(Mat* data, Mat* dataout, void* arg, bool isFrequency = 0){
-  int row = data->rows;
-  int column = data->cols;
-  format1 *rowp;
-  format2 *rowo;
-  functor* func = static_cast<functor*>(arg);
-  for(int x = 0; x < row ; x++){
-    int targetx = x;
-    if(isFrequency) targetx = x<row/2?x+row/2:(x-row/2);
-    rowp = data->ptr<format1>(x);
-    rowo = dataout->ptr<format2>(targetx);
-    for(int y = 0; y<column; y++){
-      int targety = y;
-      if(isFrequency) targety = y<column/2?y+column/2:(y-column/2);
-      (*func)(targetx, targety , rowp[y], rowo[targety]);
-    }
-  }
-}
-/******************************************************************************/
-double getVal(mode m, fftw_complex &data){
-  complex<double> &tmpc = *(complex<double>*)(data);
-  switch(m){
-    case MOD:
-      return std::abs(tmpc);
-      break;
-    case MOD2:
-      return pow(std::abs(tmpc),2);
-      break;
-    case IMAG:
-      return tmpc.imag();
-      break;
-    case PHASE:
-      if(std::abs(tmpc)==0) return 0;
-      return (std::arg(tmpc)+pi)/2/pi;
-      break;
-    default:
-      return tmpc.real();
-  }
-}
-double getVal(mode m, double &data){
-  return data;
-}
-template<typename T=fftw_complex>
-Mat* convertFromComplexToInteger(Mat *fftwImage, Mat* opencvImage = 0, mode m = MOD, bool isFrequency = 0, double decay = 1, const char* label= "default",bool islog = 0){
-  pixeltype* rowo;
-  T* rowp;
-  int row = fftwImage->rows;
-  int column = fftwImage->cols;
-  if(!opencvImage) opencvImage = new Mat(row,column,format_cv);
-  int tot = 0;
-  double max = 0;
-  for(int x = 0; x < row ; x++){
-    int targetx = x;
-    if(isFrequency) targetx = x<row/2?x+row/2:(x-row/2);
-    rowo = opencvImage->ptr<pixeltype>(targetx);
-    rowp = fftwImage->ptr<T>(x);
-    for(int y = 0; y<column; y++){
-      double target = getVal(m, rowp[y]);
-      if(max < target) max = target;
-      if(target<0) target = -target;
-      if(islog){
-        if(target!=0)
-          target = log2(target)*rcolor/log2(rcolor)+rcolor;
-	if(target < 0) target = 0;
-	
-      }
-      else target*=rcolor*decay;
-
-      tot += (int)target;
-      if(target>=rcolor) {
-	      //printf("larger than maximum of %s png %f\n",label, target);
-	      target=rcolor-1;
-	      //target=0;
-      }
-      int targety = y;
-      if(isFrequency) targety = y<column/2?y+column/2:(y-column/2);
-      rowo[targety] = floor(target);
-      //if(opencv_reverted) rowp[targety] = rcolor - 1 - rowp[targety];
-      //rowp[targety] = rcolor - 1 - rowp[targety];
-    }
-  }
-  printf("total intensity %s: %d, max: %f\n", label, tot, max);
-  return opencvImage;
-}
-template <typename inputtype>
-Mat read16bitImage(Mat imagein, int nbitsimg)
-{
-    int row = imagein.rows;
-    int column = imagein.cols;
-    int threshold = 1;
-    int factor = pow(2,16-nbitsimg);
-    Mat image(row/mergeDepth, column/mergeDepth, CV_16UC(1), Scalar::all(0));
-    inputtype* rowp;
-    uint16_t* rowo;
-    int tot = 0;
-    int max = 0;
-    for(int x = 0; x < row ; x++){
-	rowp = imagein.ptr<inputtype>(x);
-	rowo = image.ptr<uint16_t>(x/mergeDepth);
-        for(int y = 0; y<column; y++){
-	    //if(rowp[y]>0) rowo[y]=rowp[y]/256;//log2(rowp[y])*pow(2,11);
-	    //int nm1 = rowp[y-1];
-	    //int np1 = rowp[y+1];
-	    //if(n!=0) {
-    	    //  int score0 = 4; // noise filter
-	    //  if(y==0 || nm1<=threshold) score0--;
-	    //  if(y==column-1 || np1<=threshold) score0--;
-	    //  if(x==0 || imagein.ptr<inputtype>(x-1)[y]<=threshold) score0--;
-	    //  if(x==row-1 || imagein.ptr<inputtype>(x+1)[y]<=threshold) score0--;
-	    //  if(score0 > 1 || rowo[y] > threshold){
-            //    //rowo[y]=floor(log2(n)*pow(2,12));//log2(rowp[y])*pow(2,11);
-            //    if(nbits > inputbits) rowo[y]=n<<(nbits-inputbits);//log2(rowp[y])*pow(2,11);
-	    //    else rowo[y]=n>>(inputbits-nbits);//log2(rowp[y])*pow(2,11);
-	    //  }
-	    //}
-	    rowo[y/mergeDepth] += rowp[y]*factor/mergeDepth/mergeDepth;
-	    tot+= rowp[y];
-	    if(max < rowp[y]) max = rowp[y];
-	}
-    }
-    printf("\ntot=%d,max=%d\n",tot,max);
-    imwrite("input.png",image);
-    return image;
-}
-
-Mat readImage(char* name, bool isFrequency = 0){
-  Mat imagein = imread( name, IMREAD_UNCHANGED  );
-  if(nbits == 8) {
-   if(imagein.channels()==3){
-     Mat image(imagein.rows, imagein.cols, format_cv);
-     cv::cvtColor(imagein, image, cv::COLOR_BGR2GRAY);
-     return image;
-   }else{
-     return imagein;
-   }
-  }
-  if(imagein.depth() == CV_8U){
-    printf("input image nbits: 8, channels=%d",imagein.channels());
-    if(imagein.channels()>=3){
-      Mat image(imagein.rows, imagein.cols, CV_8UC1);
-      cv::cvtColor(imagein, image, cv::COLOR_BGR2GRAY);
-      return read16bitImage<char>(image,8);
-    }else
-      return read16bitImage<char>(imagein,8);
-  }else if(imagein.depth() == CV_16U){
-    printf("input image nbits: 16");
-    return read16bitImage<uint16_t>(imagein,16);
-  }else{  //Image data is float
-    printf("Image is not recognized as integer type, Image data is treated as floats\n");
-    Mat *tmp = convertFromComplexToInteger<double>(&imagein,0,MOD,0,1,"input",1); //Here we save the logarithm of the input image
-    imwrite("inputs.png", *tmp);
-    delete tmp;
-    Mat image(imagein.rows, imagein.cols, CV_64FC2);
-    auto f = [&](int x, int y, double &data, fftw_complex &dataout){
-      dataout[0] = max(0.,sqrt(data));
-      dataout[1] = 0;
-    };
-    imageLoop<decltype(f),double,fftw_complex>(&imagein,&image,&f,1);
-    return image;
-  }
-
-}
-
-Mat* convertFromIntegerToComplex(Mat &image, Mat* cache = 0, bool isFrequency = 0, const char* label= "default"){
-  int row = image.rows;
-  int column = image.cols;
-  if(!cache) cache = new Mat(row, column, CV_64FC2);
-  double tot = 0;
-  pixeltype* rowp;
-  fftw_complex* rowo;
-  int targetx, targety;
-  for(int x = 0; x < row ; x++){
-    if(isFrequency){
-      targetx = x<row/2?x+row/2:(x-row/2);
-    }else{
-      targetx = x;
-    }
-    rowp = image.ptr<pixeltype>(x);
-    rowo = cache->ptr<fftw_complex>(targetx);
-    for(int y = 0; y<column; y++){
-      if(isFrequency){
-        targety = y<column/2?y+column/2:(y-column/2);
-      }else{
-	targety = y;
-      }
-      double intensity = ((double)rowp[y])/(rcolor-1);
-      fftw_complex &datatmp = rowo[targety];
-      if(opencv_reverted) intensity = 1-intensity;
-      datatmp[0] = sqrt(intensity);
-      datatmp[1] = 0;
-      tot += sqrt(intensity);
-    }
-  }
-  printf("total intensity %s: %f\n",label, tot);
-  return cache;
-}
-
-Mat* convertFromIntegerToComplex(Mat &image,Mat &phase,Mat* cache = 0){
-  int row = image.rows;
-  int column = image.cols;
-  if(!cache) cache = new Mat(row, column, CV_64FC2);
-  int tot = 0;
-  pixeltype *rowi, *rowp;
-  fftw_complex *rowo;
-  for(int x = 0; x < row ; x++){
-    rowi = image.ptr<pixeltype>(x);
-    rowp = phase.ptr<pixeltype>(x);
-    rowo = phase.ptr<fftw_complex>(x);
-    for(int y = 0; y<column; y++){
-      tot += rowp[y];
-      double phase = rowp[y];
-      //phase*=2*pi/rcolor;
-      //phase-=pi;
-      phase = static_cast<double>(rand())/RAND_MAX*2*pi;
-      rowo[y][0] = sqrt(((double)rowi[y])/rcolor)*cos(phase);
-      rowo[y][1] = sqrt(((double)rowi[y])/rcolor)*sin(phase);
-    }
-  }
-  printf("total intensity: %d\n", tot);
-  return cache;
 }
 
 void applyMod(Mat* source, Mat* target, support *bs = 0){
@@ -419,24 +180,6 @@ Mat* createWaveFront(Mat &intensity, Mat &phase, int rows, int columns, Mat* &it
 }
 
 
-Mat* extend( Mat &src , double ratio, double val = 0)
-{
-  Mat *dst = new Mat();
-  int top, bottom, left, right;
-  int borderType = BORDER_CONSTANT;
-  if( src.empty()) {
-      printf(" Error opening image\n");
-      printf(" Program Arguments: [image_name -- default lena.jpg] \n");
-      exit(0);
-  }
-  // Initialize arguments for the filter
-  top = (int) ((ratio-1)/2*src.rows); bottom = top;
-  left = (int) ((ratio-1)/2*src.cols); right = left;
-  Scalar value(opencv_reverted?rcolor:0);
-  copyMakeBorder( src, *dst, top, bottom, left, right, borderType, value );
-  imwrite("ext.png",*dst);
-  return dst;
-}
 void ApplyERSupport(bool insideS, fftw_complex &rhonp1, fftw_complex &rhoprime){
   if(insideS){
     rhonp1[0] = rhoprime[0];

@@ -1,21 +1,16 @@
  
 #include "hdf5.h"
-#include "opencv2/imgproc.hpp"
-#include "opencv2/imgcodecs.hpp"
-#include "opencv2/highgui.hpp"
 #include "cufft.h"
 #include "common.h"
 
 
-#define FILE        "cxidb-3.cxi"
-#define DATASETNAME "data" 
 #define RANK         2
 #define RANK_OUT     2
 
-int
-main (void)
+Mat readCXI (const char* filename, Mat **mask = 0)
 {
-    hid_t       file, dataset, entry, imagehd;         /* handles */
+    int noiseLevel = 550;
+    hid_t       file, dataset, entry, imagehd, maskhd;         /* handles */
     hid_t       datatype, dataspace;   
     hid_t       memspace; 
     H5T_class_t classm;                 /* datatype class */
@@ -35,18 +30,12 @@ main (void)
     hsize_t      offset_out[2];         /* hyperslab offset in memory */
     int          i, j, k, status_n, rank;
 
-    /*
-     * Open the file and the dataset.
-     */
-    file = H5Fopen(FILE, H5F_ACC_RDONLY, H5P_DEFAULT);
+    file = H5Fopen(filename, H5F_ACC_RDONLY, H5P_DEFAULT);
     entry = H5Gopen(file, "entry_1", H5P_DEFAULT);
     imagehd = H5Gopen(entry, "image_1", H5P_DEFAULT);
-    dataset = H5Dopen(imagehd, DATASETNAME,H5P_DEFAULT);
+    dataset = H5Dopen(imagehd, "data",H5P_DEFAULT);
+    maskhd = H5Dopen(imagehd, "mask",H5P_DEFAULT);
 
-    /*
-     * Get datatype and dataspace handles and then query
-     * dataset class, order, size, rank and dimensions.
-     */
     datatype  = H5Dget_type(dataset);     /* datatype handle */ 
     classm     = H5Tget_class(datatype);
     if (classm == H5T_INTEGER) printf("Data set has INTEGER type \n");
@@ -70,56 +59,36 @@ main (void)
 
     Mat image(dims_out[0],dims_out[1],CV_32FC2);
     Mat imageint(dims_out[0],dims_out[1],CV_8UC1);
-    /* 
-     * Define hyperslab in the dataset. 
-    offset[0] = 1;
-    offset[1] = 2;
-    count[0]  = NX_SUB;
-    count[1]  = NY_SUB;
-    status = H5Sselect_hyperslab(dataspace, H5S_SELECT_SET, offset, NULL, 
-				 count, NULL);
-
-     */
-    /*
-     * Define the memory dataspace.
-     */
+    Mat imagelog(dims_out[0],dims_out[1],CV_8UC1);
+    if(mask) *mask = new Mat(dims_out[0],dims_out[1],CV_8UC1);
+    int *maskdata = (int*)malloc(dims_out[0]*dims_out[1]*sizeof(int));
     memspace = H5Screate_simple(RANK_OUT,dims_out,NULL);   
-
-    /* 
-     * Define memory hyperslab. 
-     */
-    /*
-     * Read data from hyperslab in the file into the hyperslab in 
-     * memory and display.
-     */
     hid_t complex_id = H5Tcreate(H5T_COMPOUND,sizeof(float)*2);
     H5Tinsert(complex_id,"r",0,H5T_NATIVE_FLOAT);
     H5Tinsert(complex_id,"i",sizeof(float),H5T_NATIVE_FLOAT);
     status = H5Dread(dataset, complex_id, memspace, dataspace,
 		     H5P_DEFAULT, image.data);
+    status = H5Dread(maskhd, H5T_STD_I32LE, memspace, dataspace,
+		     H5P_DEFAULT, maskdata);
+    double noiseScale = (rcolor-1)/(rcolor-noiseLevel-1);
     for(int i = 0 ; i < image.total(); i++){
-	    ((char*)imageint.data)[i] = (int)(((complex<float>*)image.data)[i].real()/256);
+	    auto &datai = ((complex<float>*)image.data)[i];
+	    datai-=noiseLevel;
+	    if(datai.real()<0) datai = 0.;
+	    datai *= noiseScale;
+	    ((char*)imageint.data)[i] = (int)(datai.real()/256);
+	    ((char*)imagelog.data)[i] = datai.real() > 1?(int)(log(datai.real())*16):0;
+	    if(mask) ((char*)(*mask)->data)[i] = maskdata[i]*255;
     }
-    /*
-     * 0 0 0 0 0 0 0
-     * 0 0 0 0 0 0 0
-     * 0 0 0 0 0 0 0
-     * 3 4 5 6 0 0 0  
-     * 4 5 6 7 0 0 0
-     * 5 6 7 8 0 0 0
-     * 0 0 0 0 0 0 0
-     */
-
-    /*
-     * Close/release resources.
-     */
     H5Tclose(datatype);
     H5Dclose(dataset);
     H5Sclose(dataspace);
     H5Sclose(memspace);
     H5Fclose(file);
     imwrite("cxi.png",imageint);
+    if(mask)imwrite("cximask.png",**mask);
+    imwrite("cxilog.png",imagelog);
 
-    return 0;
+    return image;
 }     
 

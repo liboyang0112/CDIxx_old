@@ -1,5 +1,7 @@
 cmake_minimum_required(VERSION 3.22)
 project(CDIxx LANGUAGES CXX C)
+set(CMAKE_CXX_COMPILER "/usr/bin/g++-10")
+set(CMAKE_C_COMPILER "/usr/bin/gcc-10")
 find_package(CUDA)
 find_package( OpenCV REQUIRED )
 find_package(MPI REQUIRED)
@@ -28,7 +30,7 @@ endforeach( sourcefile ${APP_SOURCES} )
 
 
 if(CUDA_FOUND AND ENABLE_CUDA)
-	set(CMAKE_CUDA_FLAGS "${CMAKE_CUDA_FLAGS} -arch compute_35 -Wno-deprecated-gpu-targets")
+	set(CMAKE_CUDA_FLAGS "${CMAKE_CUDA_FLAGS} -arch compute_35 --compiler-bindir ${CMAKE_CXX_COMPILER}")
 	message(${CUDA_INCLUDE_DIRS})
     	enable_language(CUDA)
 	list(APPEND Alllibs cufft)
