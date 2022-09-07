@@ -52,6 +52,7 @@ Mat* convertFromComplexToInteger(Mat *fftwImage, Mat* opencvImage = 0, mode m = 
     rowp = fftwImage->ptr<T>(x);
     for(int y = 0; y<column; y++){
       double target = getVal(m, rowp[y]);
+      tot += target;
       if(max < target) max = target;
       if(target<0) target = -target;
       if(islog){
@@ -62,7 +63,6 @@ Mat* convertFromComplexToInteger(Mat *fftwImage, Mat* opencvImage = 0, mode m = 
       }
       else target*=rcolor*decay;
 
-      tot += target;
       if(target>=rcolor) {
 	      //printf("larger than maximum of %s png %f\n",label, target);
 	      target=rcolor-1;
@@ -75,7 +75,7 @@ Mat* convertFromComplexToInteger(Mat *fftwImage, Mat* opencvImage = 0, mode m = 
       //rowp[targety] = rcolor - 1 - rowp[targety];
     }
   }
-  printf("total intensity %s: %4.2e, max: %f\n", label, tot, max);
+  printf("total intensity %s: %4.2e, max: %f\n", label, tot/row/column, max);
   return opencvImage;
 }
 
@@ -118,4 +118,26 @@ void imageLoop(Mat* data, Mat* dataout, void* arg, bool isFrequency = 0){
   }
 }
 Mat* extend( Mat &src , double ratio, double val = 0);
+Mat* multiWLGen(Mat* original, Mat* merged, double m, int step = 1, double dphaselambda = 0);
+Mat* multiWLGenAVG(Mat* original, Mat* merged, double m, int step = 1);
+template<typename T = complex<double>>
+Mat* convertFO(Mat* mat, Mat* cache = 0){
+	int rows = mat->rows;
+	int cols = mat->cols;
+	if(cache == 0) {
+		cache = new Mat();
+		mat->copyTo(*cache);
+	}
+	T *rowi, *rowo;
+	for(int x = 0 ; x < rows; x++){
+		rowi = mat->ptr<T>(x);
+		rowo = cache->ptr<T>((x >= rows/2)? x-rows/2:(x+rows/2));
+		for(int y = 0 ; y < cols ; y++){
+			rowo[(y >= cols/2)?y-cols/2:(y+cols/2)] = rowi[y];
+		}
+	}
+	return cache;
+}
+
+void plotColor(const char* name, Mat* logged);
 #endif

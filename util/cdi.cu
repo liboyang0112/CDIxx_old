@@ -136,6 +136,7 @@ Mat* gaussianKernel(int rows, int cols, double sigma){
     data = gaussian_norm(x-rows/2,y-cols/2,sigma);
   };
   imageLoop<decltype(f), double>(image,&f);
+  
   return image;
 }
 /******************************************************************************/
@@ -155,7 +156,7 @@ __global__ void applyMod(cufftDoubleComplex* source, cufftDoubleComplex* target,
   int y = blockIdx.y * blockDim.y + threadIdx.y;
   if(x >= cuda_row || y >= cuda_column) return;
   if(loose && bs && bs->isInside(x,y)) return;
-  double tolerance = 0.5/cuda_rcolor*cuda_scale+30./cuda_rcolor;
+  double tolerance = 0.5/cuda_rcolor*cuda_scale*16+30./cuda_rcolor; // fluctuation caused by bit depth and noise
   double maximum = pow(mergeDepth,2)*cuda_scale*0.99;
   int index = x*cuda_column + y;
   cufftDoubleComplex targetdata = target[index];
@@ -862,7 +863,8 @@ int main(int argc, char** argv )
     double decay = scale;
     if(runSim) decay=1;
     std::default_random_engine generator;
-    std::poisson_distribution<int> distribution(550);
+    double noiseLevel = 9;
+    std::poisson_distribution<int> distribution(noiseLevel);
     Mat *autocorrelation = new Mat(row,column,CV_64FC2,Scalar::all(0.));
     shrinkingMask.init_image(new Mat(row,column,CV_64FC1));
     for(int i = 0; i<row*column; i++){ //remove the phase information
@@ -871,9 +873,9 @@ int main(int argc, char** argv )
       fftw_complex &datacor = ((fftw_complex*)autocorrelation->data)[i];
       double mod = abs(data)*sqrt(decay);
       if(runSim&&simCCDbit) {
-        int range= pow(2,16);
+        int range= pow(2,12);
         mod = sqrt(((double)floor(pow(mod,2)*range))/(range)); //assuming we use 16bit CCD
-        mod = sqrt(max(0.,pow(mod,2)+double(distribution(generator)-550)/range)); //Poisson noise
+        mod = sqrt(max(0.,pow(mod,2)+double(distribution(generator)-noiseLevel)/range)); //Poisson noise
       }
       if(1){
         if(setups.useBS && ((double*)beamStop.image->data)[i]>0.5) {
