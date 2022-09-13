@@ -1,6 +1,5 @@
  
 #include "hdf5.h"
-#include "cufft.h"
 #include "common.h"
 
 

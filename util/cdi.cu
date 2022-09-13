@@ -156,7 +156,7 @@ __global__ void applyMod(cufftDoubleComplex* source, cufftDoubleComplex* target,
   int y = blockIdx.y * blockDim.y + threadIdx.y;
   if(x >= cuda_row || y >= cuda_column) return;
   if(loose && bs && bs->isInside(x,y)) return;
-  double tolerance = 0.5/cuda_rcolor*cuda_scale*16+30./cuda_rcolor; // fluctuation caused by bit depth and noise
+  double tolerance = 1./cuda_rcolor*cuda_scale;//+30./cuda_rcolor; // fluctuation caused by bit depth and noise
   double maximum = pow(mergeDepth,2)*cuda_scale*0.99;
   int index = x*cuda_column + y;
   cufftDoubleComplex targetdata = target[index];
@@ -311,13 +311,14 @@ struct experimentConfig{
  ImageMask* spt;
  ImageMask* beamStop;
  bool restart;
- double lambda = 0.6;
+ double lambda = 0.01;
  double d = 16e3;
  double pixelsize = 6.5;
- double beamspotsize = 50;
+ double beamspotsize = 200;
+ double fresnelPhaseFactor = 0;
 };
 
-__global__ void applySupport(cufftDoubleComplex *gkp1, cufftDoubleComplex *gkprime, double* objMod, ImageMask *spt){
+__global__ void applySupport(cufftDoubleComplex *gkp1, cufftDoubleComplex *gkprime, double* objMod, ImageMask *spt, double fresnelPhaseFactor = 0){
 
   int x = blockIdx.x * blockDim.x + threadIdx.x;
   int y = blockIdx.y * blockDim.y + threadIdx.y;
@@ -337,7 +338,16 @@ __global__ void applySupport(cufftDoubleComplex *gkp1, cufftDoubleComplex *gkpri
   //else ApplyHIOSupport(inside,gkp1data,gkprimedata,beta_HIO);
   //else ApplyPOSHIOSupport(inside,gkp1data,gkprimedata,beta_HIO);
   //printf("%d, (%f,%f), (%f,%f), %f\n",inside, gkprimedata.x,gkprimedata.y,gkp1data.x,gkp1data.y,cuda_beta_HIO);
-  ApplyPOSHIOSupport(inside,gkp1data,gkprimedata,cuda_beta_HIO);
+  ApplyHIOSupport(inside,gkp1data,gkprimedata,cuda_beta_HIO);
+  if(fresnelPhaseFactor!=0) {
+    if(inside){
+      double phase = fresnelPhaseFactor*(pow(double(x)/cuda_row-0.5,2)+pow(double(y)/cuda_column-0.5,2));
+      //double mod = cuCabs(gkp1data);
+      double mod = fabs(gkp1data.x*cos(phase)+gkp1data.y*sin(phase)); //use projection (Error reduction)
+      gkp1data.x=mod*cos(phase);
+      gkp1data.y=mod*sin(phase);
+    }
+  }
   objMod[index] = cuCabs(gkp1data);
   //double thres = gaussian(x-row/2,y-column/2,40);
   //ApplyLoosePOSHIOSupport(inside,gkp1data,gkprimedata,beta_HIO,thres);
@@ -460,7 +470,7 @@ void phaseRetrieve( experimentConfig &setups, Mat* targetfft, Mat* gkp1 = 0, Mat
         maskKernel = gaussianKernel(size,size,gaussianSigma);
       }
       now = std::chrono::high_resolution_clock::now();
-      applySupport<<<numBlocks,threadsPerBlock>>>(cuda_gkp1, cuda_gkprime, cuda_objMod,cuda_spt);
+      applySupport<<<numBlocks,threadsPerBlock>>>(cuda_gkp1, cuda_gkprime, cuda_objMod,cuda_spt,iter > 1000?0:setups.fresnelPhaseFactor);
       time_support+=std::chrono::high_resolution_clock::now()-now;
       /*
         cudaMemcpy(gkp1->data, cuda_gkp1, sz, cudaMemcpyDeviceToHost);
@@ -679,16 +689,12 @@ int main(int argc, char** argv )
     bool doIteration = 1;
     bool useGaussionLumination = 0;
     bool useGaussionHERALDO = 0;
+    bool doCentral =0;
     bool useRectHERALDO = 0;
 
-    //int seed = 1657180926;// 1657180330
-    //int seed = 1657182238; // oversampling = 3, modulation range = pi, reversed image
-    //1657182741 // oversampling = 3, modulation range = 1.1pi, reversed image
-    //1657182948 // oversampling = 3, modulation range = 1.3pi, reversed image
-    //1657184141 // oversampling = 3, modulation range = 2pi, upright image, random phase
     srand(seed);
     printf("seed:%d\n",seed);
-    double oversampling = 4;
+    double oversampling = 16./3;
     Mat* gkp1 = 0;
     Mat* targetfft = 0;
     Mat* fftresult = 0;
@@ -735,7 +741,7 @@ int main(int argc, char** argv )
     //cir.r=50;
     cir.x0=row/2;
     cir.y0=column/2;
-    cir.r=10;
+    cir.r=20;
     //cir2.x0 = column*2/3-50;
     //cir2.y0 = row*2/3+110;
     //cir2.r = 50;
@@ -758,12 +764,12 @@ int main(int argc, char** argv )
 
     experimentConfig setups;
     setups.reconAC = 0;
-    setups.useShrinkMap = 1;
+    setups.useShrinkMap = 0;
     ImageMask shrinkingMask;
     shrinkingMask.threshold = 0.1;
     setups.useDM = 0;
 
-    setups.useBS = 1;
+    setups.useBS = 0;
     ImageMask beamStop;
     beamStop.threshold = 0.5;
     beamStop.init_image(new Mat(row,column,CV_64FC1));
@@ -781,15 +787,16 @@ int main(int argc, char** argv )
     
     setups.beamStop = &beamStop;//&cir;
     setups.restart = restart;
-    //setups.d = oversampling*setups.pixelsize*setups.beamspotsize/setups.lambda; //distance to guarentee oversampling
-    setups.pixelsize = 7;//setups.d/oversampling/setups.beamspotsize*setups.lambda;
+    setups.d = oversampling*setups.pixelsize*setups.beamspotsize/setups.lambda; //distance to guarentee oversampling
+    //setups.pixelsize = 7;//setups.d/oversampling/setups.beamspotsize*setups.lambda;
     printf("recommanded imaging distance = %f\n", setups.d);
     printf("recommanded pixel size = %f\n", setups.pixelsize);
 
     bool isFarField = 0;
-    double reversefresnelNumber = setups.d*setups.lambda/pi/pow(setups.beamspotsize,2);
-    printf("Fresnel Number = %f\n",1./reversefresnelNumber);
-    if(reversefresnelNumber > 100) isFarField = 1;
+    double fresnelNumber = 1./(setups.d*setups.lambda/pi/pow(setups.beamspotsize,2));
+    printf("Fresnel Number = %f\n",fresnelNumber);
+    if(fresnelNumber < 0.01) isFarField = 1;
+    if(isFresnel&&!isFarField) setups.fresnelPhaseFactor = pi*setups.lambda*setups.d/pow(setups.pixelsize,2);
     //these are for simulation
     Mat* cache = 0;
     Mat* cache1;
@@ -809,7 +816,7 @@ int main(int argc, char** argv )
       if(!isFarField && isFresnel){
         auto f = [&](int x, int y, fftw_complex &data){
           auto tmp = (complex<double>*)&data;
-	  double phase = pi*setups.lambda*setups.d/pow(setups.pixelsize,2)*(pow((x-0.5*row)/row,2)+pow((y-0.5*column)/column,2))/10;
+	  double phase = setups.fresnelPhaseFactor*(pow(double(x)/row-0.5,2)+pow(double(y)/column-0.5,2));
 	  *tmp *= exp(complex<double>(0,phase));
 	};
         imageLoop<decltype(f)>(gkp1,&f,0);
@@ -831,7 +838,7 @@ int main(int argc, char** argv )
         auto f = [&](int x, int y, fftw_complex &data){
           auto tmp = (complex<double>*)&data;
 	  if(cir2.isInside(x,y)) 
-		  *tmp *= gaussian(x-cir2.x0,y-cir2.y0,cir2.r*4);
+            *tmp *= gaussian(x-cir2.x0,y-cir2.y0,cir2.r*4);
 	  else *tmp = gaussian(x-cir2.x0,y-cir2.y0,cir2.r*4);
 	  if(x < row*1/3 && y < row*1/3) *tmp = 0;
 	  //if(cir2.isInside(x,y))printf("%f, ",gaussian(x-cir2.x0,y-cir2.y0,cir2.r/2));
@@ -863,7 +870,7 @@ int main(int argc, char** argv )
     double decay = scale;
     if(runSim) decay=1;
     std::default_random_engine generator;
-    double noiseLevel = 9;
+    double noiseLevel = 550;
     std::poisson_distribution<int> distribution(noiseLevel);
     Mat *autocorrelation = new Mat(row,column,CV_64FC2,Scalar::all(0.));
     shrinkingMask.init_image(new Mat(row,column,CV_64FC1));
@@ -873,20 +880,10 @@ int main(int argc, char** argv )
       fftw_complex &datacor = ((fftw_complex*)autocorrelation->data)[i];
       double mod = abs(data)*sqrt(decay);
       if(runSim&&simCCDbit) {
-        int range= pow(2,12);
+        int range= pow(2,16);
         mod = sqrt(((double)floor(pow(mod,2)*range))/(range)); //assuming we use 16bit CCD
         mod = sqrt(max(0.,pow(mod,2)+double(distribution(generator)-noiseLevel)/range)); //Poisson noise
-      }
-      if(1){
-        if(setups.useBS && ((double*)beamStop.image->data)[i]>0.5) {
-          data = 0.;
-	  mod = 0;
-        }
-        else{
-          //complex<double> tmp(targetfft[i][0],targetfft[i][1]);
-          double randphase = static_cast<double>(rand())/RAND_MAX*2*pi;
-          data = mod*exp(complex<double>(0,randphase));
-        }
+        data = complex<double>(mod,0); 
       }
       //datacor[0] = pow(mod,2)*(tx-row/2)*(ty-column/2)/90; // ucore is the derivitaves of the diffraction pattern: append *(tx-row/2)*(ty-column/2)/20;
       datacor[0] = pow(mod,2); //ucore is the diffraction pattern
@@ -896,6 +893,10 @@ int main(int argc, char** argv )
     imwrite("ucore.png",*cache);
     if(!setups.reconAC || runSim) {
       autocorrelation = fftw(autocorrelation, autocorrelation, 0);
+      for(int i = 0; i<row*column; i++){ //remove the phase information
+        complex<double> &datacor = ((complex<double>*)autocorrelation->data)[i];
+	datacor = abs(datacor);
+      }
       rect *cuda_spt;
       cudaMalloc((void**)&cuda_spt,sizeof(rect));
       cudaMemcpy(cuda_spt, &re, sizeof(rect), cudaMemcpyHostToDevice);
@@ -917,6 +918,24 @@ int main(int argc, char** argv )
       };
       imageLoop<decltype(f1),double,fftw_complex>(shrinkingMask.image,autocorrelation,&f1,1);
       shrinkingMask.cpyToGM();
+    }
+    if(doCentral){
+      targetfft = fftw(autocorrelation, targetfft, 1);
+    }
+    if(1){ //apply random phase
+      for(int i = 0; i<row*column; i++){ //remove the phase information
+        complex<double> &data = *(complex<double>*)((fftw_complex*)targetfft->data)[i];
+        double mod = doCentral? sqrt(abs(data)) : abs(data);
+        if(setups.useBS && ((double*)beamStop.image->data)[i]>0.5) {
+          data = 0.;
+	  mod = 0;
+        }
+        else{
+          //complex<double> tmp(targetfft[i][0],targetfft[i][1]);
+          double randphase = static_cast<double>(rand())/RAND_MAX*2*pi;
+          data = mod*exp(complex<double>(0,randphase));
+        }
+      }
     }
 
     convertFromComplexToInteger<double>(shrinkingMask.image, cache,MOD,0);

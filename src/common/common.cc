@@ -82,7 +82,7 @@ double getVal(mode m, double &data){
   return data;
 }
 
-Mat* multiWLGen(Mat* original, Mat* output, double m, int step, double dphilambda){ //original image, ratio between long lambda and short lambda.
+Mat* multiWLGen(Mat* original, Mat* output, double m, int step, double dphilambda, double *spectrum){ //original image, ratio between long lambda and short lambda.
 	int startx = 0;
 	int starty = 0;
 	if(!output) output = new Mat(original->rows/m,original->cols/m, CV_64FC2);
@@ -109,7 +109,7 @@ Mat* multiWLGen(Mat* original, Mat* output, double m, int step, double dphilambd
 	return output;
 }
 
-Mat* multiWLGenAVG(Mat* original, Mat* output, double m, int step){ //original image, ratio between long lambda and short lambda.
+Mat* multiWLGenAVG(Mat* original, Mat* output, double m, int step, double *spectrum){ //original image, ratio between long lambda and short lambda.
 	int startx = 0;
 	int starty = 0;
 	if(!output) output = new Mat(original->rows/m,original->cols/m, CV_16UC1);
@@ -125,6 +125,12 @@ Mat* multiWLGenAVG(Mat* original, Mat* output, double m, int step){ //original i
 		Mat *mergedt = convertFO<complex<double>>(mergedf);
 		resize((*mergedt)(Range(startx, original->rows-startx),Range(starty, original->cols-starty)), *mergedtmp,output->size());
         	imageLoop<decltype(f), complex<double>>(mergedtmp, &f1);
+		if(im == max/2) {
+			Mat *fftwtmp = fftw(mergedtmp, 0, 1);
+			Mat * tmpwrite = convertFromComplexToInteger(fftwtmp, 0 , MOD2, 1,1, "", 1);
+			imwrite("cropmid.png",*tmpwrite);
+			delete tmpwrite, fftwtmp;
+		}
 		double scale = double(mergedtmp->rows)/(original->rows-2*im);
 		if(im == 0) {
 			mergedtmp->copyTo(*output);
@@ -134,6 +140,68 @@ Mat* multiWLGenAVG(Mat* original, Mat* output, double m, int step){ //original i
 		delete mergedtmp;
 		delete mergedt;
 	}
+	delete mergedf;
+	return output;
+}
+void addMatComponent_pattern(Mat *matrix, Size sz, int x, int y, double scale){
+	double newx = (x-sz.height/2) * scale + sz.height/2;
+	double newy = (y-sz.width/2) * scale + sz.width/2;
+	int idx = x*sz.width + y;
+	if(newx <= -scale/2-0.5 || newx >= sz.height+scale/2+0.5 || newy <= -scale/2-0.5 || newy >= sz.width+scale/2+0.5) return;
+	double density = 1./scale*scale;
+	int startx = floor(newx-scale/2); //for these pixels, matrix[i+j*row][x+y*row] += density;
+	int starty = floor(newy-scale/2);
+	int endx = ceil(newx+scale/2);
+	int endy = ceil(newy+scale/2);
+	for(int i = max(0,startx); i <= min(sz.height-1,endx); i++){
+		double wtx = 1;
+		if(i == startx) wtx*=newx-scale/2-startx;
+		if(i == endx) wtx*=endx-newx-scale/2;
+		for(int j = max(0,starty); j <= min(sz.width-1,endy); j++){
+			double weight = wtx;
+			if(j == starty) weight*=newy-scale/2-starty;
+			if(j == endy) weight*=endy-newy-scale/2;
+			printf("(%d,%d),[%d,%d]+=%f\n",i,j,i*sz.width+j,idx,density*weight);
+			//matrix->ptr<T>(i*sz.width+j)[idx] += density*weight;
+		}
+	}
+}
+void addMatComponent(Mat *matrix, Size sz, int x, int y, double scale){
+	double newx = (x-sz.height/2) * scale + sz.height/2;
+	double newy = (y-sz.width/2) * scale + sz.width/2;
+	int idx = x*sz.width + y;
+	if(newx <= -scale/2-0.5 || newx >= sz.height+scale/2+0.5 || newy <= -scale/2-0.5 || newy >= sz.width+scale/2+0.5) return;
+	double density = 1./scale*scale;
+	int startx = floor(newx-scale/2); //for these pixels, matrix[i+j*row][x+y*row] += density;
+	int starty = floor(newy-scale/2);
+	int endx = ceil(newx+scale/2);
+	int endy = ceil(newy+scale/2);
+	for(int i = max(0,startx); i <= min(sz.height-1,endx); i++){
+		double wtx = 1;
+		if(i == startx) wtx*=newx-scale/2-startx;
+		if(i == endx) wtx*=endx-newx-scale/2;
+		for(int j = max(0,starty); j <= min(sz.width-1,endy); j++){
+			double weight = wtx;
+			if(j == starty) weight*=newy-scale/2-starty;
+			if(j == endy) weight*=endy-newy-scale/2;
+			printf("(%d,%d),[%d,%d]+=%f\n",i,j,i*sz.width+j,idx,density*weight);
+			//matrix->ptr<T>(i*sz.width+j)[idx] += density*weight;
+		}
+	}
+}
+Mat* multiWLGenAVG_MAT(Mat* original, Mat* output, double m, int step, double *spectrum){ //original image, ratio between long lambda and short lambda.
+	int startx = 0;
+	int starty = 0;
+	if(!output) output = new Mat(original->rows,original->cols, CV_16UC1);
+	Mat* mergedf = fftw(original,0,1);
+	int max = original->rows*(1-1./m)/2;
+	double weight = double(step)/max;
+        auto f = [&](int x, int y, complex<double> &data){ data = abs(data); };
+        imageLoop<decltype(f), complex<double>>(mergedf, &f);
+        auto f1 = [&](int x, int y, complex<double> &data){ data = pow(abs(data),2); };
+	Mat *matrix = new Mat(original->total(),original->total(),CV_16UC1);
+	addMatComponent(matrix, original->size(), original->rows/2, original->cols/2, m);
+	exit(0);
 	delete mergedf;
 	return output;
 }

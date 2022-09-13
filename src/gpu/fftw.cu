@@ -1,5 +1,5 @@
-#include <cufftw.h>
 #include "fftw.h"
+#include <cufftw.h>
 #include <iostream>
 using namespace cv;
 using namespace std;
@@ -34,9 +34,10 @@ Mat* fftw ( Mat* in, Mat *out = 0, bool isforward = 1)
     cufftPlan2d ( plan, row, column, CUFFT_Z2Z);
   }else{
     if(sz!=row*column*sizeof(cufftDoubleComplex)){
-      printf("ERROR: currently cufft only supports single image size to avoid construct and destroy the plan, please check if you are trying to FFT images with different dimensions:\n %lu/(%d*%d*%lu)=%f\n",sz,row,column,sizeof(cufftDoubleComplex),((double)sz)/row/column/sizeof(cufftDoubleComplex));
-      printf("FILE: %s, LINE: %d\n",__FILE__, __LINE__);
-      exit(0);
+      sz = row*column*sizeof(cufftDoubleComplex);
+      cudaFree(cudaData);
+      Check(cudaMalloc((void**)&cudaData, sz));
+      cufftPlan2d ( plan, row, column, CUFFT_Z2Z);
     }
   }
   Check(cudaMemcpy(cudaData, in->data, sz, cudaMemcpyHostToDevice));

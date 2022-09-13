@@ -14,13 +14,17 @@ double gaussian_norm(double x, double y, double sigma){
 }
 
 int main(int argc, char** argv){
+	/*
 	fftw_complex *freqDom, *timeDom;
 	int Npoints = 1000; //Npoints = n_pixel*(lambdamax/lambdamin*-1)
 	freqDom = (fftw_complex*)malloc(Npoints*sizeof(fftw_complex));
 	timeDom = (fftw_complex*)malloc(Npoints*sizeof(fftw_complex));
+	*/
 	Mat input = readImage(argv[1]);
-	Mat *img = extend(input,4);
+	Mat *img = extend(input,8);
 	Mat *imgf = convertFromIntegerToComplex(*img);
+	Mat *inputimg = convertFromComplexToInteger(imgf, 0, MOD2, 0, 1, "input", 0);
+	imwrite("mergedinput.png",*inputimg);
 	int m = 2;
 	double dphaselambda = 10*pi;  // simulate lambda ~ lambda/m
 	int ntime = 30;
@@ -35,8 +39,12 @@ int main(int argc, char** argv){
 	}
 	*/
 	Mat *merged = multiWLGenAVG(imgf,0,m,1);
-	convertFromComplexToInteger(merged, logged, MOD, 0, 1, "merged", 1);
-	plotColor("mergedavg.png",logged);
+	convertFromComplexToInteger(merged, logged, MOD, 0, 1, "merged", 0);
+	//plotColor("mergedavg.png",logged);
+	imwrite("mergedavg.png",*logged);
+	Mat *autocorrelation = fftw(merged,0,1);
+	convertFromComplexToInteger(autocorrelation, logged, MOD, 1, 1, "merged", 1);
+	imwrite("mergedAC.png",*logged);
 	return 0;
 }
 
