@@ -21,15 +21,15 @@ int main(int argc, char** argv){
 	timeDom = (fftw_complex*)malloc(Npoints*sizeof(fftw_complex));
 	*/
 	Mat input = readImage(argv[1]);
-	Mat *img = extend(input,8);
+	Mat *img = extend(input,4);
 	Mat *imgf = convertFromIntegerToComplex(*img);
 	Mat *inputimg = convertFromComplexToInteger(imgf, 0, MOD2, 0, 1, "input", 0);
 	imwrite("mergedinput.png",*inputimg);
-	int m = 2;
+	double m = 2;
 	double dphaselambda = 10*pi;  // simulate lambda ~ lambda/m
 	int ntime = 30;
 	double dphase = dphaselambda/ntime;
-	Mat *logged = new Mat(img->rows/m, img->cols/m, CV_16UC1);
+	Mat *logged = new Mat(img->rows, img->cols, CV_16UC1);
 	/*
 	for(int i = -ntime ; i < ntime; i++){
 		Mat *merged = multiWLGen(imgf,0,m,1,dphase*i);
@@ -38,12 +38,19 @@ int main(int argc, char** argv){
 		delete merged;
 	}
 	*/
-	Mat *merged = multiWLGenAVG(imgf,0,m,1);
-	convertFromComplexToInteger(merged, logged, MOD, 0, 1, "merged", 0);
-	//plotColor("mergedavg.png",logged);
-	imwrite("mergedavg.png",*logged);
+	Mat *merged = multiWLGenAVG_MAT_FFT(imgf,0,m,0.51);
+	Mat *mergedmag = new Mat(merged->rows,merged->cols,CV_64FC1);
+	auto f = [&](int x, int y, double &out, complex<double> &in){
+		out = abs(in);
+	};
+	imageLoop<decltype(f), double, complex<double>>(mergedmag, merged, &f);
+	Mat *mergedMag = convertFO<double>(mergedmag);
+	imwrite("mergedavg_float.tiff",*mergedMag);
+	convertFromComplexToInteger(merged, logged, MOD, 0, 1, "merged", 1);
+	plotColor("mergedavg.png",logged);
+	//imwrite("mergedavg.png",*logged);
 	Mat *autocorrelation = fftw(merged,0,1);
-	convertFromComplexToInteger(autocorrelation, logged, MOD, 1, 1, "merged", 1);
+	convertFromComplexToInteger(autocorrelation, logged, MOD, 0, 1, "merged", 1);
 	imwrite("mergedAC.png",*logged);
 	return 0;
 }

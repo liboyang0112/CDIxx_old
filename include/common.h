@@ -118,9 +118,11 @@ void imageLoop(Mat* data, Mat* dataout, void* arg, bool isFrequency = 0){
   }
 }
 Mat* extend( Mat &src , double ratio, double val = 0);
-Mat* multiWLGen(Mat* original, Mat* merged, double m, int step = 1, double dphaselambda = 0, double *spectrum = 0);
-Mat* multiWLGenAVG(Mat* original, Mat* merged, double m, int step = 1, double *spectrum = 0);
-Mat* multiWLGenAVG_MAT(Mat* original, Mat* merged, double m, int step = 1, double *spectrum = 0);
+Mat* multiWLGen(Mat* original, Mat* merged, double m, double step = 1, double dphaselambda = 0, double *spectrum = 0);
+Mat* multiWLGenAVG(Mat* original, Mat* merged, double m, double step = 1, double *spectrum = 0);
+Mat* multiWLGenAVG_MAT(Mat* original, Mat* merged, double m, double step = 1, double *spectrum = 0);
+Mat* multiWLGenAVG_MAT_AC(Mat* original, Mat* merged, double m, double step = 1, double *spectrum = 0);
+Mat* multiWLGenAVG_MAT_FFT(Mat* original, Mat* merged, double m, double step = 1, double *spectrum = 0);
 template<typename T = complex<double>>
 Mat* convertFO(Mat* mat, Mat* cache = 0){
 	int rows = mat->rows;

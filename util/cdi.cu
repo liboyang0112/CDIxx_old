@@ -1,6 +1,4 @@
 #include <complex>
-#include <tbb/tbb.h>
-#include <fftw3-mpi.h>
 # include <cassert>
 # include <stdio.h>
 # include <time.h>
@@ -20,21 +18,25 @@
 #include "imageReader.h"
 #include <ctime>
 
+#include "cudaConfig.h"
+#define gpuErrchk(ans) { gpuAssert((ans), __FILE__, __LINE__); }
+inline void gpuAssert(cudaError_t code, const char *file, int line, bool abort=true)
+{
+   if (code != cudaSuccess)
+   {
+      fprintf(stderr,"GPUassert: %s %s %d\n", cudaGetErrorString(code), file, line);
+      if (abort) exit(code);
+   }
+}
+
 using std::cout; using std::endl;
 using std::chrono::duration_cast;
 using std::chrono::milliseconds;
 using std::chrono::seconds;
 using std::chrono::system_clock;
 
-//#define Bits 16
-const dim3 threadsPerBlock(16,16);
-__device__ __constant__ double cuda_beta_HIO;
-__device__ __constant__ int cuda_row;
-__device__ __constant__ int cuda_column;
-__device__ __constant__ int cuda_rcolor;
-__device__ __constant__ double cuda_scale;
-__device__ __constant__ int cuda_totalIntensity;
 cufftHandle *plan = new cufftHandle();
+//#define Bits 16
 using namespace cv;
 double gaussian(double x, double y, double sigma){
   double r2 = pow(x,2) + pow(y,2);
@@ -45,7 +47,6 @@ double gaussian_norm(double x, double y, double sigma){
   return 1./(2*pi*sigma*sigma)*gaussian(x,y,sigma);
 }
 
-/******************************************************************************/
 
 void maskOperation(Mat &input, Mat &output, Mat &kernel){
   filter2D(input, output, input.depth(), kernel);
@@ -139,7 +140,6 @@ Mat* gaussianKernel(int rows, int cols, double sigma){
   
   return image;
 }
-/******************************************************************************/
 __global__ void applyNorm(cufftDoubleComplex* data){
   int x = blockIdx.x * blockDim.x + threadIdx.x;
   int y = blockIdx.y * blockDim.y + threadIdx.y;
@@ -217,6 +217,16 @@ Mat* createWaveFront(Mat &intensity, Mat &phase, int rows, int columns, Mat* &it
   //imwrite("input.png",image);
 }
 
+__device__ void ApplyHIOSupport(bool insideS, cufftDoubleComplex &rhonp1, cufftDoubleComplex &rhoprime, double beta){
+  if(insideS){
+    rhonp1.x = rhoprime.x;
+    rhonp1.y = rhoprime.y;
+  }else{
+    rhonp1.x -= beta*rhoprime.x;
+    rhonp1.y -= beta*rhoprime.y;
+  }
+}
+
 
 void ApplyERSupport(bool insideS, fftw_complex &rhonp1, fftw_complex &rhoprime){
   if(insideS){
@@ -241,15 +251,6 @@ void ApplyLoosePOSERSupport(bool insideS, fftw_complex &rhonp1, fftw_complex &rh
     rhonp1[0] = threshold;
   }
     rhonp1[1] = 0;
-}
-__device__ void ApplyHIOSupport(bool insideS, cufftDoubleComplex &rhonp1, cufftDoubleComplex &rhoprime, double beta){
-  if(insideS){
-    rhonp1.x = rhoprime.x;
-    rhonp1.y = rhoprime.y;
-  }else{
-    rhonp1.x -= beta*rhoprime.x;
-    rhonp1.y -= beta*rhoprime.y;
-  }
 }
 __device__ void ApplyPOSHIOSupport(bool insideS, cufftDoubleComplex &rhonp1, cufftDoubleComplex &rhoprime, double beta){
   if(rhoprime.x > 0 && (insideS/* || rhoprime[0]<30./rcolor*/)){
@@ -395,7 +396,7 @@ void phaseRetrieve( experimentConfig &setups, Mat* targetfft, Mat* gkp1 = 0, Mat
     cufftDoubleComplex *cuda_fftresult, *cuda_targetfft, *cuda_gkprime, *cuda_gkp1, *cuda_pmpsg;
     double *cuda_objMod;
     ImageMask *cuda_spt;
-    cudaMalloc((void**)&cuda_fftresult, sz);
+    gpuErrchk(cudaMalloc((void**)&cuda_fftresult, sz));
     cudaMalloc((void**)&cuda_targetfft, sz);
     cudaMalloc((void**)&cuda_gkprime, sz);
     cudaMalloc((void**)&cuda_gkp1, sz);
@@ -407,10 +408,13 @@ void phaseRetrieve( experimentConfig &setups, Mat* targetfft, Mat* gkp1 = 0, Mat
 
     dim3 numBlocks((row-1)/threadsPerBlock.x+1, (column-1)/threadsPerBlock.y+1);
     //dim3 numBlocks(row/threadsPerBlock.x, column/threadsPerBlock.y);
+    cudaMemcpy(gkp1->data, cuda_targetfft, sz, cudaMemcpyDeviceToHost);
+    convertFromComplexToInteger( gkp1,cache, MOD2,0);
+    imwrite("pre_recon_intensity.png",*cache);
 
     cufftExecZ2Z( *plan, cuda_targetfft, cuda_gkp1, CUFFT_INVERSE);
     applyNorm<<<numBlocks,threadsPerBlock>>>(cuda_gkp1);
-    cudaDeviceSynchronize();
+
     std::chrono::time_point<std::chrono::high_resolution_clock> now = std::chrono::high_resolution_clock::now();
     std::chrono::duration<int64_t, std::nano> time_applyMod(0);
     std::chrono::duration<int64_t, std::nano> time_FFT(0);
@@ -421,7 +425,7 @@ void phaseRetrieve( experimentConfig &setups, Mat* targetfft, Mat* gkp1 = 0, Mat
       if(iter%100==0) {
 	long tot = time_FFT.count()+time_norm.count()+time_support.count()+time_applyMod.count();
 	if(tot!=0)
-	printf("iter: %d, timing:\n  FFT:%ld, %4.2f%%\n  NORM:%ld, %4.2f%%\n  Support:%ld, %4.2f%%\n  applyMod:%ld, %4.2f%%\n",iter, 
+          printf("iter: %d, timing:\n  FFT:%ld, %4.2f%%\n  NORM:%ld, %4.2f%%\n  Support:%ld, %4.2f%%\n  applyMod:%ld, %4.2f%%\n",iter, 
 	  time_FFT.count(),     ((double)time_FFT.count())/tot*100,
 	  time_norm.count(),    ((double)time_norm.count())/tot*100,
 	  time_support.count(), ((double)time_support.count())/tot*100,
@@ -694,7 +698,8 @@ int main(int argc, char** argv )
 
     srand(seed);
     printf("seed:%d\n",seed);
-    double oversampling = 16./3;
+    double oversampling = 2;
+    double padAutoCorrelation = 2;
     Mat* gkp1 = 0;
     Mat* targetfft = 0;
     Mat* fftresult = 0;
@@ -726,13 +731,6 @@ int main(int argc, char** argv )
 	    row*=oversampling;
 	    column*=oversampling;
     }
-    cudaMemcpyToSymbol(cuda_row,&row,sizeof(row));
-    cudaMemcpyToSymbol(cuda_column,&column,sizeof(column));
-    cudaMemcpyToSymbol(cuda_rcolor,&rcolor,sizeof(rcolor));
-    //double tmp = scale*10;
-    cudaMemcpyToSymbol(cuda_scale,&scale,sizeof(scale));
-
-    cufftPlan2d ( plan, row, column, CUFFT_Z2Z);
 
     C_circle cir,cir2,cir3;
     //cir is the beam stop
@@ -753,8 +751,8 @@ int main(int argc, char** argv )
     //cir3.r = 300/mergeDepth;
     cir3.r = 40;
     rect re;
-    re.startx = (oversampling-1)/2*row/oversampling;
-    re.starty = (oversampling-1)/2*column/oversampling;
+    re.startx = (oversampling-1)/2*row/oversampling-1;
+    re.starty = (oversampling-1)/2*column/oversampling-1;
     //re.startx = 1./4*row;
     //re.starty = 1./4*column;
     re.endx = row-re.startx;
@@ -764,7 +762,7 @@ int main(int argc, char** argv )
 
     experimentConfig setups;
     setups.reconAC = 0;
-    setups.useShrinkMap = 0;
+    setups.useShrinkMap = 1;
     ImageMask shrinkingMask;
     shrinkingMask.threshold = 0.1;
     setups.useDM = 0;
@@ -870,13 +868,12 @@ int main(int argc, char** argv )
     double decay = scale;
     if(runSim) decay=1;
     std::default_random_engine generator;
-    double noiseLevel = 550;
+    double noiseLevel = 0;
     std::poisson_distribution<int> distribution(noiseLevel);
     Mat *autocorrelation = new Mat(row,column,CV_64FC2,Scalar::all(0.));
-    shrinkingMask.init_image(new Mat(row,column,CV_64FC1));
     for(int i = 0; i<row*column; i++){ //remove the phase information
      // double randphase = arg(tmp);//static_cast<double>(rand())/RAND_MAX*2*pi;
-      complex<double> &data = *(complex<double>*)((fftw_complex*)targetfft->data)[i];
+      complex<double> &data = ((complex<double>*)(targetfft->data))[i];
       fftw_complex &datacor = ((fftw_complex*)autocorrelation->data)[i];
       double mod = abs(data)*sqrt(decay);
       if(runSim&&simCCDbit) {
@@ -888,11 +885,34 @@ int main(int argc, char** argv )
       //datacor[0] = pow(mod,2)*(tx-row/2)*(ty-column/2)/90; // ucore is the derivitaves of the diffraction pattern: append *(tx-row/2)*(ty-column/2)/20;
       datacor[0] = pow(mod,2); //ucore is the diffraction pattern
       datacor[1] = 0;
+      if(padAutoCorrelation) datacor[0]/=padAutoCorrelation;
     }
-    convertFromComplexToInteger( autocorrelation, cache, REAL,1,1,"HERALDO U core"); 
-    imwrite("ucore.png",*cache);
     if(!setups.reconAC || runSim) {
       autocorrelation = fftw(autocorrelation, autocorrelation, 0);
+    }
+    if(padAutoCorrelation) {
+      row*=padAutoCorrelation;
+      column*=padAutoCorrelation;
+      Mat* tmp = convertFO<complex<double>>(autocorrelation);
+      delete autocorrelation;
+      autocorrelation = extend(*tmp,padAutoCorrelation);
+      delete cache,targetfft,gkp1;
+      cache = new Mat(row,column,format_cv);
+      targetfft = new Mat(row,column,CV_64FC2);
+      gkp1 = 0;
+      delete tmp;
+    }
+    cudaMemcpyToSymbol(cuda_row,&row,sizeof(row));
+    cudaMemcpyToSymbol(cuda_column,&column,sizeof(column));
+    cudaMemcpyToSymbol(cuda_rcolor,&rcolor,sizeof(rcolor));
+    //double tmp = scale*10;
+    cudaMemcpyToSymbol(cuda_scale,&scale,sizeof(scale));
+    cufftPlan2d ( plan, row, column, CUFFT_Z2Z);
+
+    shrinkingMask.init_image(new Mat(row,column,CV_64FC1));
+    convertFromComplexToInteger( autocorrelation, cache, REAL,0,1,"HERALDO U core"); 
+    imwrite("ucore.png",*cache);
+    if(!setups.reconAC || runSim) {
       for(int i = 0; i<row*column; i++){ //remove the phase information
         complex<double> &datacor = ((complex<double>*)autocorrelation->data)[i];
 	datacor = abs(datacor);
@@ -919,19 +939,17 @@ int main(int argc, char** argv )
       imageLoop<decltype(f1),double,fftw_complex>(shrinkingMask.image,autocorrelation,&f1,1);
       shrinkingMask.cpyToGM();
     }
-    if(doCentral){
+    if(doCentral || padAutoCorrelation!=0){
       targetfft = fftw(autocorrelation, targetfft, 1);
     }
     if(1){ //apply random phase
-      for(int i = 0; i<row*column; i++){ //remove the phase information
+      for(int i = 0; i<row*column; i++){ 
         complex<double> &data = *(complex<double>*)((fftw_complex*)targetfft->data)[i];
-        double mod = doCentral? sqrt(abs(data)) : abs(data);
+        double mod = (doCentral||padAutoCorrelation)? sqrt(abs(data)) : abs(data);
         if(setups.useBS && ((double*)beamStop.image->data)[i]>0.5) {
           data = 0.;
-	  mod = 0;
         }
         else{
-          //complex<double> tmp(targetfft[i][0],targetfft[i][1]);
           double randphase = static_cast<double>(rand())/RAND_MAX*2*pi;
           data = mod*exp(complex<double>(0,randphase));
         }
@@ -951,7 +969,7 @@ int main(int argc, char** argv )
     }
     convertFromComplexToInteger(targetfft, cache, PHASE,1);
     imwrite("init_phase.png",*cache);
-    convertFromComplexToInteger(targetfft, cache, MOD2,1,1,"Pattern MOD2");
+    convertFromComplexToInteger(targetfft, cache, MOD2,1,4,"Pattern MOD2");
     imwrite("init_pattern.png",*cache);
     //if(runSim) targetfft = convertFromIntegerToComplex(*cache, targetfft, 1 , "waveFront");
     convertFromComplexToInteger(autocorrelation, cache, REAL,1,1,"Autocorrelation MOD2",1);
@@ -960,3 +978,4 @@ int main(int argc, char** argv )
     if(doIteration) phaseRetrieve(setups, targetfft, gkp1, cache, fftresult); //fftresult is the starting point of the iteration
     return 0;
 }
+

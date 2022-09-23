@@ -106,6 +106,6 @@ Mat* extend( Mat &src , double ratio, double val)
   left = (int) ((ratio-1)/2*src.cols); right = left;
   Scalar value(opencv_reverted?rcolor:0);
   copyMakeBorder( src, *dst, top, bottom, left, right, borderType, value );
-  imwrite("ext.png",*dst);
+//  imwrite("ext.png",*dst);
   return dst;
 }

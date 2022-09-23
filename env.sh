@@ -11,7 +11,7 @@ if [ -z ${CDI_DIR+x} ] ; then
 	if [ $(uname) = "Darwin" ]; then
 		export DYLD_LIBRARY_PATH+=:$CDI_DIR/lib
 	else
-		export LD_LIBRARY_PATH+=:$CDI_DIR/bin
+		export LD_LIBRARY_PATH+=:$CDI_DIR/lib
 	fi
 	alias cdicd='cd $CDI_DIR'
 	alias cdimake='cd $CDI_DIR/build; make -j4; cd -'
