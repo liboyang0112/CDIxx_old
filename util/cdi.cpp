@@ -1,5 +1,5 @@
 #include <complex>
-#include <tbb/tbb.h>
+#include <tbb/parallel_for.h>
 #include <fftw3-mpi.h>
 # include <cassert>
 # include <stdio.h>
@@ -18,7 +18,7 @@
 #include "common.h"
 #include "imageReader.h"
 
-static tbb::affinity_partitioner ap;
+//static tbb::affinity_partitioner ap;
 
 // This example reads the configuration file 'example.cfg' and displays
 // some of its contents.
@@ -97,9 +97,9 @@ void applyMod(Mat* source, Mat* target, support *bs = 0){
   double maximum = pow(mergeDepth,2)*scale;
   int row = target->rows;
   int column = target->cols;
-  parallel_for(
-    tbb::detail::d1::blocked_range<size_t>(0, row),
-    [&](const tbb::detail::d1::blocked_range<size_t> &r)
+  tbb::parallel_for(
+    tbb::blocked_range<size_t>(0, row),
+    [&](const tbb::blocked_range<size_t> r)
     {
       for (size_t x = r.begin(); x != r.end(); ++x)
       {
@@ -141,8 +141,7 @@ void applyMod(Mat* source, Mat* target, support *bs = 0){
           sourcedata[1] *= ratio;
         }
       }
-    },
-    ap
+    }
   );
 }
 Mat* createWaveFront(Mat &intensity, Mat &phase, int rows, int columns, Mat* &itptr, Mat* wavefront = 0){
@@ -335,9 +334,9 @@ void phaseRetrieve( experimentConfig &setups, Mat* targetfft, Mat* gkp1 = 0, Mat
         size = size/2*2+1; //ensure odd
         maskKernel = gaussianKernel(size,size,gaussianSigma);
       }
-      parallel_for(
-        tbb::detail::d1::blocked_range<size_t>(0, row),
-        [&](const tbb::detail::d1::blocked_range<size_t> &r)
+      tbb::parallel_for(
+        tbb::blocked_range<size_t>(0, row),
+        [&](const tbb::blocked_range<size_t> &r)
         {
           for (int x = r.begin(); x != r.end(); ++x){
 	    fftw_complex *gkp1p = gkp1->ptr<fftw_complex>(x);
@@ -375,7 +374,7 @@ void phaseRetrieve( experimentConfig &setups, Mat* targetfft, Mat* gkp1 = 0, Mat
               epsilonS+=hypot(tmp[0]-gkp1data[0],tmp[1]-gkp1data[1]);
 	    }
 	  }
-        },ap
+        }
       );
       if(updateMask){
         filter2D(objMod, *((ImageMask*)&re)->image,objMod.depth(),*maskKernel);
