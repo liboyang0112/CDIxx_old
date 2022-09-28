@@ -69,7 +69,7 @@ Mat readCXI (const char* filename, Mat **mask = 0)
 		     H5P_DEFAULT, image.data);
     status = H5Dread(maskhd, H5T_STD_I32LE, memspace, dataspace,
 		     H5P_DEFAULT, maskdata);
-    double noiseScale = (rcolor-1)/(rcolor-noiseLevel-1);
+    Real noiseScale = (rcolor-1)/(rcolor-noiseLevel-1);
     for(int i = 0 ; i < image.total(); i++){
 	    auto &datai = ((complex<float>*)image.data)[i];
 	    datai-=noiseLevel;

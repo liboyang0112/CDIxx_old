@@ -26,18 +26,18 @@ using std::chrono::system_clock;
 
 // This code only apply to image with height and width in power of 2, i.e. ... 256, 512, 1024, .... due to Cuda restrictions.
 //#define Bits 16
-__device__ __constant__ double cuda_beta_HIO;
+__device__ __constant__ Real cuda_beta_HIO;
 __device__ __constant__ int cuda_row;
 __device__ __constant__ int cuda_column;
 __device__ __constant__ int cuda_rcolor;
-__device__ __constant__ double cuda_scale;
+__device__ __constant__ Real cuda_scale;
 using namespace cv;
-double gaussian(double x, double y, double sigma){
-  double r2 = pow(x,2) + pow(y,2);
+Real gaussian(Real x, Real y, Real sigma){
+  Real r2 = pow(x,2) + pow(y,2);
   return exp(-r2/2/pow(sigma,2));
 }
 
-double gaussian_norm(double x, double y, double sigma){
+Real gaussian_norm(Real x, Real y, Real sigma){
   return 1./(2*pi*sigma*sigma)*gaussian(x,y,sigma);
 }
 
@@ -57,38 +57,37 @@ int main(int argc, char** argv )
     int row = 512;
     int column = 512;
     //These are in mm;
-    double lambda = 800e-6;
-    double dhole = 2; // distance between two holes of pump light
-    double focus = 20;
-    double pixelsize = 3e-3;
-    double spotSize = 60e-3;
-    double dn = 1e-5;
-    double dx = 0.1;
-    double phi0 = dn*dx/lambda;
+    Real lambda = 800e-6;
+    Real dhole = 2; // distance between two holes of pump light
+    Real focus = 20;
+    Real pixelsize = 3e-3;
+    Real spotSize = 60e-3;
+    Real dn = 1e-5;
+    Real dx = 0.1;
+    Real phi0 = dn*dx/lambda;
 
     int spotpix = spotSize/pixelsize;
-    double k = sin(dhole/2/focus)*2*pi/lambda * pixelsize;
+    Real k = sin(dhole/2/focus)*2*pi/lambda * pixelsize;
     Mat image (row, column, CV_16UC(1), Scalar::all(0));
-    Mat imageInput (row, column, CV_64FC2, Scalar::all(0));
-    Mat imageTarget (row, column, CV_64FC2, Scalar::all(0));
-    fftw_complex* inputField = (fftw_complex*) imageInput.data;
+    Mat imageInput (row, column, float_cv_format(2), Scalar::all(0));
+    Mat imageTarget (row, column, float_cv_format(2), Scalar::all(0));
+    fftw_format* inputField = (fftw_format*) imageInput.data;
     for(int x = 0; x < row ; x++){
       for(int y = 0; y<column; y++){
-	double Emod =  gaussian(x-0.5*row,y-0.5*column,spotpix);
+	Real Emod =  gaussian(x-0.5*row,y-0.5*column,spotpix);
 	/*
-	double Emodt = 3*gaussian(((double)x)/row-0.1,((double)y)/column-0.5,0.01)
-		     + 3*gaussian(((double)x)/row-0.2,((double)y)/column-0.5,0.01)
-		     + 3*gaussian(((double)x)/row-0.3,((double)y)/column-0.5,0.01)
-		     + 3*gaussian(((double)x)/row-0.4,((double)y)/column-0.5,0.01)
-		     + 3*gaussian(((double)x)/row-0.5,((double)y)/column-0.5,0.01)
-		     + 3*gaussian(((double)x)/row-0.6,((double)y)/column-0.5,0.01)
-		     + 3*gaussian(((double)x)/row-0.7,((double)y)/column-0.5,0.01)
-		     + 3*gaussian(((double)x)/row-0.8,((double)y)/column-0.5,0.01)
-		     + 3*gaussian(((double)x)/row-0.9,((double)y)/column-0.5,0.01);
+	Real Emodt = 3*gaussian(((Real)x)/row-0.1,((Real)y)/column-0.5,0.01)
+		     + 3*gaussian(((Real)x)/row-0.2,((Real)y)/column-0.5,0.01)
+		     + 3*gaussian(((Real)x)/row-0.3,((Real)y)/column-0.5,0.01)
+		     + 3*gaussian(((Real)x)/row-0.4,((Real)y)/column-0.5,0.01)
+		     + 3*gaussian(((Real)x)/row-0.5,((Real)y)/column-0.5,0.01)
+		     + 3*gaussian(((Real)x)/row-0.6,((Real)y)/column-0.5,0.01)
+		     + 3*gaussian(((Real)x)/row-0.7,((Real)y)/column-0.5,0.01)
+		     + 3*gaussian(((Real)x)/row-0.8,((Real)y)/column-0.5,0.01)
+		     + 3*gaussian(((Real)x)/row-0.9,((Real)y)/column-0.5,0.01);
 		     */
-	double phase = cos(k * x)*phi0;
-        inputField[x+y*row][0] = Emod*sin(phase);
-        inputField[x+y*row][1] = Emod*cos(phase);
+	Real phase = cos(k * x)*phi0;
+        inputField[x+y*row] = fftw_format(Emod*sin(phase),Emod*cos(phase));
       }
     }
     fftw(&imageInput, &imageTarget, 1);

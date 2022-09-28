@@ -3,6 +3,7 @@
 #include <vector>
 #include <iostream>
 #include <opencv2/opencv.hpp>
+#include "format.h"
 using namespace cv;
 using namespace std;
 using pixeltype=uint16_t;
@@ -55,7 +56,7 @@ int main(int argc, char** argv )
 //    int column = 1000;
     Mat image (row, column, format_cv, Scalar::all(0)); //log image
     Mat imagelogmerged (row/mergeDepth, column/mergeDepth, format_cv, Scalar::all(0)); //log image
-    Mat imagefloat (row/mergeDepth, column/mergeDepth, CV_64FC1, Scalar::all(0));
+    Mat imagefloat (row/mergeDepth, column/mergeDepth, float_cv_format(1), Scalar::all(0));
     //cout << imagein<<endl;
     pixeltype* rowp;
     pixeltype* rowo;

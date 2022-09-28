@@ -47,12 +47,11 @@ Mat readImage(char* name, bool isFrequency, Mat **mask){
   if(string(name).find(".cxi")!=string::npos){
     printf("Input is recognized as cxi file\n");
     Mat imagein = readCXI(name, mask);  //32FC2, max 65535
-    Mat image(imagein.rows, imagein.cols, CV_64FC2);
-    auto f = [&](int x, int y, complex<float> &data, fftw_complex &dataout){
-      dataout[0] = sqrt(max(float(0),data.real()/rcolor));
-      dataout[1] = 0;
+    Mat image(imagein.rows, imagein.cols, float_cv_format(2));
+    auto f = [&](int x, int y, complex<float> &data, fftw_format &dataout){
+      dataout = fftw_format(sqrt(max(Real(0),data.real()/rcolor)),0);
     };
-    imageLoop<decltype(f),complex<float>,fftw_complex>(&imagein,&image,&f,1);
+    imageLoop<decltype(f),complex<float>,fftw_format>(&imagein,&image,&f,1);
     return image;
   }
   Mat imagein = imread( name, IMREAD_UNCHANGED  );
@@ -78,20 +77,19 @@ Mat readImage(char* name, bool isFrequency, Mat **mask){
     return read16bitImage<uint16_t>(imagein,16);
   }else{  //Image data is float
     printf("Image depth %d is not recognized as integer type (%d or %d), Image data is treated as floats\n", imagein.depth(), CV_8U, CV_16U);
-    Mat *tmp = convertFromComplexToInteger<double>(&imagein,0,MOD,0,1,"input",1); //Here we save the logarithm of the input image
+    Mat *tmp = convertFromComplexToInteger<Real>(&imagein,0,MOD,0,1,"input",1); //Here we save the logarithm of the input image
     imwrite("inputs.png", *tmp);
     delete tmp;
-    Mat image(imagein.rows, imagein.cols, CV_64FC2);
-    auto f = [&](int x, int y, double &data, fftw_complex &dataout){
-      dataout[0] = sqrt(max(0.,data));
-      dataout[1] = 0;
+    Mat image(imagein.rows, imagein.cols, float_cv_format(2));
+    auto f = [&](int x, int y, Real &data, fftw_format &dataout){
+      dataout = fftw_format(sqrt(max(Real(0),data)),0);
     };
-    imageLoop<decltype(f),double,fftw_complex>(&imagein,&image,&f,1);
+    imageLoop<decltype(f),Real,fftw_format>(&imagein,&image,&f,1);
     return image;
   }
 }
 
-Mat* extend( Mat &src , double ratio, double val)
+Mat* extend( Mat &src , Real ratio, Real val)
 {
   Mat *dst = new Mat();
   int top, bottom, left, right;

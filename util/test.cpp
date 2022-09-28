@@ -3,6 +3,7 @@
 #include <vector>
 #include <iostream>
 #include <opencv2/opencv.hpp>
+#include "format.h"
 using namespace cv;
 using namespace std;
 using pixeltype=uint16_t;
@@ -33,7 +34,7 @@ int main(int argc, char** argv )
 {
 	const int row = 100;
 	const int column = 100;
-	Mat image(row, column, CV_64FC2);
+	Mat image(row, column, float_cv_format(2));
 	if ( !image.data )
 	{
 	    printf("No image data \n");

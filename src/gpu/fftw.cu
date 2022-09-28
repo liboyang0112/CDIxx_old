@@ -1,4 +1,5 @@
-#include "fftw.h"
+#include "format.h"
+#include "cudaConfig.h"
 #include <cufftw.h>
 #include <iostream>
 using namespace cv;
@@ -16,7 +17,7 @@ void Check(cudaError_t status)
         }
 }
 
-static cufftDoubleComplex *cudaData = 0;
+static complexFormat *cudaData = 0;
 static cufftHandle *plan; 
 static size_t sz;
 
@@ -24,31 +25,32 @@ Mat* fftw ( Mat* in, Mat *out = 0, bool isforward = 1)
 {
   int row = in->rows;
   int column = in->cols;
-  double ratio = 1./sqrt(row*column);
-  if(out == 0) out = new Mat(row,column,CV_64FC2);
+  Real ratio = 1./sqrt(row*column);
+  if(out == 0) out = new Mat(row,column,float_cv_format(2));
 
   if(cudaData==0) {
-    sz = row*column*sizeof(cufftDoubleComplex);
+    sz = row*column*sizeof(complexFormat);
     Check(cudaMalloc((void**)&cudaData, sz));
     plan = new cufftHandle();
-    cufftPlan2d ( plan, row, column, CUFFT_Z2Z);
+    cufftPlan2d ( plan, row, column, FFTformat);
   }else{
-    if(sz!=row*column*sizeof(cufftDoubleComplex)){
-      sz = row*column*sizeof(cufftDoubleComplex);
+    if(sz!=row*column*sizeof(complexFormat)){
+      printf("reconfiguring CUFFT\n");
+      sz = row*column*sizeof(complexFormat);
       cudaFree(cudaData);
       Check(cudaMalloc((void**)&cudaData, sz));
-      cufftPlan2d ( plan, row, column, CUFFT_Z2Z);
+      cufftPlan2d ( plan, row, column, FFTformat);
     }
   }
   Check(cudaMemcpy(cudaData, in->data, sz, cudaMemcpyHostToDevice));
     
-  cufftExecZ2Z( *plan, cudaData,cudaData, isforward? CUFFT_FORWARD: CUFFT_INVERSE);
+  myCufftExec( *plan, cudaData,cudaData, isforward? CUFFT_FORWARD: CUFFT_INVERSE);
 
   Check(cudaMemcpy(out->data, cudaData, sz, cudaMemcpyDeviceToHost));
 
   for(int i = 0; i < out->total() ; i++){
-    ((cufftDoubleComplex*)out->data)[i].x*=ratio;
-    ((cufftDoubleComplex*)out->data)[i].y*=ratio;
+    ((complexFormat*)out->data)[i].x*=ratio;
+    ((complexFormat*)out->data)[i].y*=ratio;
   } //normalization
   //cufftDestroy(*plan);
   return out;

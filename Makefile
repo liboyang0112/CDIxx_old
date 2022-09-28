@@ -5,7 +5,7 @@ LOCAL_INCLUDE=include
 LOCAL_OBJ=obj
 LOCAL_BIN=bin
 GCC=gcc-10
-CXX=g++-10
+CXX=g++-10 -g -D__CUDA__=1
 MPICXX=mpic++
 NVCC=nvcc -arch=compute_35 --compiler-bindir /usr/bin/g++-10
 
@@ -66,6 +66,9 @@ ${LOCAL_BIN}/%_cu: ${LOCAL_OBJ}/%_cu.o ${COMMON_LIB} ${CUDA_WRAP_LIB}
 ${LOCAL_LIB}/lib%.so: ${LOCAL_OBJ}/%.o
 	${CXX} -shared $< -o $@ ${LINK_FLAGS_EXT}
 
+${LOCAL_LIB}/libreadCXI.so: ${LOCAL_OBJ}/readCXI.o
+	${MPICXX} -shared $< -o $@ ${LINK_FLAGS_EXT}
+
 ${LOCAL_OBJ}/%.o: src/common/%.c
 	${GCC} -c -fPIC $< ${INCLUDE_FLAGS} -o $@
 
@@ -73,7 +76,7 @@ ${LOCAL_OBJ}/%.o: util/%.cpp
 	${CXX} -c $< ${INCLUDE_FLAGS} -o $@
 
 ${LOCAL_OBJ}/%_cu.o: util/%.cu
-	${NVCC} -c $< ${INCLUDE_FLAGS} -o $@
+	${NVCC} -c $< $(patsubst -pthread%, %, ${INCLUDE_FLAGS}) -o $@
 
 ${LOCAL_OBJ}/%.o: util/%.cpp
 	${CXX} -c $< ${INCLUDE_FLAGS} -o $@
@@ -89,6 +92,6 @@ ${LOCAL_LIB}/lib%_cu.a: ${LOCAL_OBJ}/%_cu.o
 	ranlib $@
 
 ${LOCAL_OBJ}/%_cu.o: src/gpu/%.cu
-	${NVCC} -c $< -o $@ ${INCLUDE_FLAGS}
+	${NVCC} -c $< -o $@ $(patsubst -pthread%, %, ${INCLUDE_FLAGS})
 clean:
 	rm lib/* obj/* bin/*

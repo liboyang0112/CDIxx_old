@@ -24,12 +24,12 @@
 // some of its contents.
 //#define Bits 16
 using namespace cv;
-double gaussian(double x, double y, double sigma){
-  double r2 = pow(x,2) + pow(y,2);
+Real gaussian(Real x, Real y, Real sigma){
+  Real r2 = pow(x,2) + pow(y,2);
   return exp(-r2/2/pow(sigma,2));
 }
 
-double gaussian_norm(double x, double y, double sigma){
+Real gaussian_norm(Real x, Real y, Real sigma){
   return 1./(2*pi*sigma*sigma)*gaussian(x,y,sigma);
 }
 
@@ -46,12 +46,12 @@ public:
 };
 class ImageMask : public support{
 public:
-  Mat *image; //rows, cols, CV_64FC1
+  Mat *image; //rows, cols, float_cv_format(1)
   ImageMask():support(){};
-  double threshold;
+  Real threshold;
   bool isInside(int x, int y){
-    if(image->ptr<double>(x)[y] < threshold) {
-	    //printf("%d, %d = %f lower than threshold, dropping\n",x,y,image->ptr<double>(x)[y]);
+    if(image->ptr<Real>(x)[y] < threshold) {
+	    //printf("%d, %d = %f lower than threshold, dropping\n",x,y,image->ptr<Real>(x)[y]);
 	    return false;
     }
     return true;
@@ -73,28 +73,28 @@ class C_circle : public support{
 public:
   int x0;
   int y0;
-  double r;
+  Real r;
   C_circle():support(){};
   bool isInside(int x, int y){
-    double dr = sqrt(pow(x-x0,2)+pow(y-y0,2));
+    Real dr = sqrt(pow(x-x0,2)+pow(y-y0,2));
     if(dr < r) return true;
     return false;
   }
 };
-Mat* gaussianKernel(int rows, int cols, double sigma){
-  Mat* image = new Mat(rows, cols, CV_64FC1);
-  auto f = [&](int x, int y, double &data){
+Mat* gaussianKernel(int rows, int cols, Real sigma){
+  Mat* image = new Mat(rows, cols, float_cv_format(1));
+  auto f = [&](int x, int y, Real &data){
     data = gaussian_norm(x-rows/2,y-cols/2,sigma);
   };
-  imageLoop<decltype(f), double>(image,&f);
+  imageLoop<decltype(f), Real>(image,&f);
   return image;
 }
 
 void applyMod(Mat* source, Mat* target, support *bs = 0){
   assert(source!=0);
   assert(target!=0);
-  double tolerance = 0.5/rcolor*scale;
-  double maximum = pow(mergeDepth,2)*scale;
+  Real tolerance = 0.5/rcolor*scale;
+  Real maximum = pow(mergeDepth,2)*scale;
   int row = target->rows;
   int column = target->cols;
   tbb::parallel_for(
@@ -103,9 +103,9 @@ void applyMod(Mat* source, Mat* target, support *bs = 0){
     {
       for (size_t x = r.begin(); x != r.end(); ++x)
       {
-        fftw_complex* rowo,*rowp;
-        rowo = source->ptr<fftw_complex>(x);
-        rowp = target->ptr<fftw_complex>(x);
+        fftw_format* rowo,*rowp;
+        rowo = source->ptr<fftw_format>(x);
+        rowp = target->ptr<fftw_format>(x);
         for(size_t y = 0; y < column; y++){
 	  if(bs!=0){
             int tx = x;
@@ -118,27 +118,25 @@ void applyMod(Mat* source, Mat* target, support *bs = 0){
               continue;
             }
           }
-          fftw_complex &targetdata = rowp[y];
-          fftw_complex &sourcedata = rowo[y];
-          double ratio = 1;
-          double mod2 = targetdata[0]*targetdata[0] + targetdata[1]*targetdata[1];
-          double srcmod2 = sourcedata[0]*sourcedata[0] + sourcedata[1]*sourcedata[1];
+          fftw_format &targetdata = rowp[y];
+          fftw_format &sourcedata = rowo[y];
+          Real ratio = 1;
+          Real mod2 = targetdata.real()*targetdata.real() + targetdata.imag()*targetdata.imag();
+          Real srcmod2 = sourcedata.real()*sourcedata.real() + sourcedata.imag()*sourcedata.imag();
           if(mod2>=maximum) {
             mod2 = max(maximum,srcmod2);
           }
           if(srcmod2 == 0){
-            sourcedata[0] = sqrt(mod2);
-            sourcedata[1] = 0;
+            sourcedata = sqrt(mod2);
             continue;
           }
-          double diff = mod2-srcmod2;
+          Real diff = mod2-srcmod2;
           if(diff>tolerance){
             ratio = sqrt((mod2-tolerance)/srcmod2);
           }else if(diff < -tolerance ){
             ratio = sqrt((mod2+tolerance)/srcmod2);
           }
-          sourcedata[0] *= ratio;
-          sourcedata[1] *= ratio;
+          sourcedata *= ratio;
         }
       }
     }
@@ -179,92 +177,70 @@ Mat* createWaveFront(Mat &intensity, Mat &phase, int rows, int columns, Mat* &it
 }
 
 
-void ApplyERSupport(bool insideS, fftw_complex &rhonp1, fftw_complex &rhoprime){
+void ApplyERSupport(bool insideS, fftw_format &rhonp1, fftw_format &rhoprime){
   if(insideS){
-    rhonp1[0] = rhoprime[0];
-    rhonp1[1] = rhoprime[1];
+    rhonp1 = rhoprime;
   }else{
-    rhonp1[0] = rhonp1[1] = 0;
+    rhonp1 = 0;
   }
 }
-void ApplyPOSERSupport(bool insideS, fftw_complex &rhonp1, fftw_complex &rhoprime){
+void ApplyPOSERSupport(bool insideS, fftw_format &rhonp1, fftw_format &rhoprime){
   if(insideS){
-    rhonp1[0] = rhoprime[0]*( rhoprime[0] > 0 );
-    rhonp1[1] = 0;
+    rhonp1 = complex<Real>(rhoprime.real()*( rhoprime.real() > 0 ), 0);
   }else{
-    rhonp1[0] = rhonp1[1] = 0;
+    rhonp1 = 0;
   }
 }
-void ApplyLoosePOSERSupport(bool insideS, fftw_complex &rhonp1, fftw_complex &rhoprime, double threshold){
-  if(rhoprime[0] < threshold){
-    rhonp1[0] = rhoprime[0]*( rhoprime[0] > 0 );
+void ApplyLoosePOSERSupport(bool insideS, fftw_format &rhonp1, fftw_format &rhoprime, Real threshold){
+  if(rhoprime.real() < threshold){
+    rhonp1 = complex<Real>(rhoprime.real()*( rhoprime.real() > 0 ), 0);
   }else{
-    rhonp1[0] = threshold;
+    rhonp1 = complex<Real>(threshold, 0);
   }
-    rhonp1[1] = 0;
 }
-void ApplyHIOSupport(bool insideS, fftw_complex &rhonp1, fftw_complex &rhoprime, double beta){
+void ApplyHIOSupport(bool insideS, fftw_format &rhonp1, fftw_format &rhoprime, Real beta){
   if(insideS){
-    rhonp1[0] = rhoprime[0];
-    rhonp1[1] = rhoprime[1];
+    rhonp1 = rhoprime;
   }else{
-    rhonp1[0] -= beta*rhoprime[0];
-    rhonp1[1] -= beta*rhoprime[1];
+    rhonp1 -= beta*rhoprime;
   }
 }
-void ApplyPOSHIOSupport(bool insideS, fftw_complex &rhonp1, fftw_complex &rhoprime, double beta){
-  if(rhoprime[0] > 0 && (insideS/* || rhoprime[0]<30./rcolor*/)){
-    rhonp1[0] = rhoprime[0];
-    //rhonp1[1] = rhoprime[1];
-    rhonp1[1] -= beta*rhoprime[1];
+void ApplyPOSHIOSupport(bool insideS, fftw_format &rhonp1, fftw_format &rhoprime, Real beta){
+  if(rhoprime.real() > 0 && (insideS/* || rhoprime.real<30./rcolor*/)){
+    rhonp1 = complex<Real>(rhoprime.real(), rhonp1.imag()-beta*rhoprime.imag());
   }else{
-    rhonp1[0] -= beta*rhoprime[0];
-    rhonp1[1] -= beta*rhoprime[1];
+    rhonp1 -= beta*rhoprime;
   }
 }
-void ApplyLoosePOSHIOSupport(bool insideS, fftw_complex &rhonp1, fftw_complex &rhoprime, double beta, double threshold){
-  if(rhoprime[0] > 0 && (rhoprime[0]<threshold)){
-    rhonp1[0] = rhoprime[0];
-    //rhonp1[1] = rhoprime[1];
-    rhonp1[1] -= beta*rhoprime[1];
+void ApplyLoosePOSHIOSupport(bool insideS, fftw_format &rhonp1, fftw_format &rhoprime, Real beta, Real threshold){
+  if(rhoprime.real() > 0 && (rhoprime.real()<threshold)){
+    rhonp1 = complex<Real>(rhoprime.real(), rhonp1.imag()-beta*rhoprime.imag());
   }else{
-    rhonp1[0] -= beta*(rhoprime[0]);
-    rhonp1[1] -= beta*rhoprime[1];
+    rhonp1 -= beta*rhoprime;
   }
 }
-void ApplySFSupport(bool insideS, fftw_complex &rhonp1, fftw_complex &rhoprime){
+void ApplySFSupport(bool insideS, fftw_format &rhonp1, fftw_format &rhoprime){
   if(insideS){
-    rhonp1[0] = rhoprime[0];
-    rhonp1[1] = rhoprime[1];
+    rhonp1 = rhoprime;
   }else{
-    rhonp1[0] = -0.9*rhoprime[0];
-    rhonp1[1] = -0.9*rhoprime[1];
+    rhonp1 = Real(-0.9)*rhoprime;
   }
 }
-void ApplyDMSupport(bool insideS, fftw_complex &rhonp1, fftw_complex &rhop, fftw_complex &pmsrho, double gammas, double gammam, double beta){
+void ApplyDMSupport(bool insideS, fftw_format &rhonp1, fftw_format &rhop, fftw_format &pmsrho, Real gammas, Real gammam, Real beta){
 
-  complex<double> &rho = *(complex<double>*)rhonp1;
-  complex<double> &rhoprime = *(complex<double>*)rhop;
-  complex<double> &pmpsrho = *(complex<double>*)pmsrho;
   if(1||insideS){
-    rho = 2.*pmpsrho-rhoprime;//(1-beta*gammam)*rhoprime+beta*(1+gammam+gammas)*rhoprime-beta*(1+gammas)*pmpsrho;
+    rhonp1 = Real(2)*pmsrho-rhop;//(1-beta*gammam)*rhoprime+beta*(1+gammam+gammas)*rhoprime-beta*(1+gammas)*pmpsrho;
   }else{
-    rho += 2.*pmpsrho-rhoprime;//beta*gammas*rhoprime-beta*(1+gammas)*pmpsrho;
+    rhonp1 += Real(2)*pmsrho-rhop;//beta*gammas*rhoprime-beta*(1+gammas)*pmpsrho;
   }
 }
-void ApplyPOSDMSupport(bool insideS, fftw_complex &rhonp1, fftw_complex &rhop, fftw_complex &pmsrho, double gammas, double gammam, double beta){
-
-  complex<double> rho(rhonp1[0],rhonp1[1]);
-  complex<double> rhoprime(rhop[0],rhop[1]);
-  complex<double> pmpsrho(pmsrho[0],pmsrho[1]);
+void ApplyPOSDMSupport(bool insideS, fftw_format &rhonp1, fftw_format &rhop, fftw_format &pmsrho, Real gammas, Real gammam, Real beta){
   if(insideS){
-    rho = (1-beta*gammam)*rhoprime+beta*(1+gammam+gammas)*rhoprime-beta*(1+gammas)*pmpsrho;
+    rhonp1 = (1-beta*gammam)*rhop+beta*(1+gammam+gammas)*rhop-beta*(1+gammas)*pmsrho;
   }else{
-    rho += beta*gammas*rhoprime-beta*(1+gammas)*pmpsrho;
+    rhonp1 += beta*gammas*rhop-beta*(1+gammas)*pmsrho;
   }
-  rhonp1[0] = rho.real();
-  if(rhonp1[0]<0) rhonp1[0] = 0;
-  rhonp1[1] = 0;
+  rhonp1=complex<Real>(max(rhonp1.real(),Real(0)),Real(0));
 }
 struct experimentConfig{
  bool useDM;
@@ -273,10 +249,10 @@ struct experimentConfig{
  support* spt;
  support* beamStop;
  bool restart;
- double lambda = 0.6;
- double d = 16e3;
- double pixelsize = 6.5;
- double beamspotsize = 50;
+ Real lambda = 0.6;
+ Real d = 16e3;
+ Real pixelsize = 6.5;
+ Real beamspotsize = 50;
 };
 
 void phaseRetrieve( experimentConfig &setups, Mat* targetfft, Mat* gkp1 = 0, Mat *cache = 0, Mat* fftresult = 0 ){
@@ -294,11 +270,11 @@ void phaseRetrieve( experimentConfig &setups, Mat* targetfft, Mat* gkp1 = 0, Mat
     }
     Mat* gkprime = 0;
     assert(targetfft!=0);
-    double beta = -1;
-    double beta_HIO = 0.9;
-    double gammas = -1./beta;
-    double gammam = 1./beta;
-    double epsilonS, epsilonF;
+    Real beta = -1;
+    Real beta_HIO = 0.9;
+    Real gammas = -1./beta;
+    Real gammam = 1./beta;
+    Real epsilonS, epsilonF;
     gkp1 = fftw(targetfft,gkp1,0); //IFFT to get O field;
     std::ofstream fepF,fepS;
     fepF.open("epsilonF.txt",ios::out |(setups.restart? ios::app:std::ios_base::openmode(0)));
@@ -306,9 +282,9 @@ void phaseRetrieve( experimentConfig &setups, Mat* targetfft, Mat* gkp1 = 0, Mat
     int niters = 5000;
     int tot = row*column;
     bool saveIter=1;
-    Mat objMod(row,column,CV_64FC1);
+    Mat objMod(row,column,float_cv_format(1));
     Mat* maskKernel;
-    double gaussianSigma = 3;
+    Real gaussianSigma = 3;
     for(int iter = 0; iter < niters; iter++){
       //start iteration
       if(iter%100==0 && saveIter) {
@@ -339,17 +315,17 @@ void phaseRetrieve( experimentConfig &setups, Mat* targetfft, Mat* gkp1 = 0, Mat
         [&](const tbb::blocked_range<size_t> &r)
         {
           for (int x = r.begin(); x != r.end(); ++x){
-	    fftw_complex *gkp1p = gkp1->ptr<fftw_complex>(x);
-	    fftw_complex *gkprimep = gkprime->ptr<fftw_complex>(x);
-	    double *objModp;
+	    fftw_format *gkp1p = gkp1->ptr<fftw_format>(x);
+	    fftw_format *gkprimep = gkprime->ptr<fftw_format>(x);
+	    Real *objModp;
 	    if(updateMask){
-              objModp = objMod.ptr<double>(x);
+              objModp = objMod.ptr<Real>(x);
 	    }
             for (int y = 0; y < column; ++y){
-	      fftw_complex &gkp1data = gkp1p[y];
-	      fftw_complex &gkprimedata = gkprimep[y];
-              epsilonF+=hypot(gkp1data[0]-gkprimedata[0],gkp1data[1]-gkprimedata[1]);
-              fftw_complex tmp = {gkp1data[0],gkp1data[1]};
+	      fftw_format &gkp1data = gkp1p[y];
+	      fftw_format &gkprimedata = gkprimep[y];
+              epsilonF+=pow(abs(gkp1data-gkprimedata),2);
+              fftw_format tmp = fftw_format(gkp1data.real(),gkp1data.imag());
               bool inside = re.isInside(x,y);
               //if(iter >= niters - 20 ) ApplyERSupport(inside,gkp1data,gkprimedata);
               //if(iter >= niters - 20 || iter % 200 == 0) ApplyERSupport(inside,gkp1data,gkprimedata);
@@ -360,9 +336,9 @@ void phaseRetrieve( experimentConfig &setups, Mat* targetfft, Mat* gkp1 = 0, Mat
               //else ApplyPOSHIOSupport(inside,gkp1data,gkprimedata,beta_HIO);
 	      ApplyHIOSupport(inside,gkp1data,gkprimedata,beta_HIO);
 	      if(updateMask){
-                objModp[y] = hypot(gkp1data[0],gkp1data[1]);
+                objModp[y] = abs(gkp1data);
 	      }
-	      //double thres = gaussian(x-row/2,y-column/2,40);
+	      //Real thres = gaussian(x-row/2,y-column/2,40);
 	      //ApplyLoosePOSHIOSupport(inside,gkp1data,gkprimedata,beta_HIO,thres);
               //ApplyLoosePOSERSupport(inside,gkp1data,gkprimedata,thres);
               //else {
@@ -371,7 +347,7 @@ void phaseRetrieve( experimentConfig &setups, Mat* targetfft, Mat* gkp1 = 0, Mat
               //ApplyERSupport(inside,pmpsg[index],gkp1data);
               //ApplyHIOSupport(inside,gkp1data,gkprimedata,beta);
               //else ApplySFSupport(inside,gkp1data,gkprimedata);
-              epsilonS+=hypot(tmp[0]-gkp1data[0],tmp[1]-gkp1data[1]);
+              epsilonS+=pow(abs(tmp-gkp1data),2);
 	    }
 	  }
         }
@@ -382,8 +358,8 @@ void phaseRetrieve( experimentConfig &setups, Mat* targetfft, Mat* gkp1 = 0, Mat
 	delete maskKernel;
       }
       if(updateMask&&iter%100==0&&saveIter){
-	convertFromComplexToInteger<double>(((ImageMask*)&re)->image, cache,MOD,0);
-	//convertFromComplexToInteger<double>(&objMod, cache,MOD,0);
+	convertFromComplexToInteger<Real>(((ImageMask*)&re)->image, cache,MOD,0);
+	//convertFromComplexToInteger<Real>(&objMod, cache,MOD,0);
         std::string iterstr = to_string(iter);
 	imwrite("mask"+iterstr+".png",*cache);
       }
@@ -458,7 +434,7 @@ int main(int argc, char** argv )
     //1657184141 // oversampling = 3, modulation range = 2pi, upright image, random phase
     srand(seed);
     printf("seed:%d\n",seed);
-    double oversampling = 3;
+    Real oversampling = 3;
     Mat* gkp1 = 0;
     Mat* targetfft = 0;
     Mat* fftresult = 0;
@@ -535,10 +511,10 @@ int main(int argc, char** argv )
     printf("recommanded pixel size = %f\n", setups.pixelsize);
 
     bool isFarField = 0;
-    double reversefresnelNumber = setups.d*setups.lambda/pi/pow(setups.beamspotsize,2);
+    Real reversefresnelNumber = setups.d*setups.lambda/pi/pow(setups.beamspotsize,2);
     printf("Fresnel Number = %f\n",1./reversefresnelNumber);
     if(reversefresnelNumber > 100) isFarField = 1;
-    size_t sz = row*column*sizeof(fftw_complex);
+    size_t sz = row*column*sizeof(fftw_format);
     //these are for simulation
     Mat* cache = 0;
     Mat* cache1;
@@ -556,10 +532,10 @@ int main(int argc, char** argv )
 	gkp1 = convertFromIntegerToComplex(*cache, gkp1,0,"waveFront");
       }
       if(!isFarField && isFresnel){
-        auto f = [&](int x, int y, fftw_complex &data){
-          auto tmp = (complex<double>*)&data;
-	  double phase = pi*setups.lambda*setups.d/pow(setups.pixelsize,2)*(pow((x-0.5*row)/row,2)+pow((y-0.5*column)/column,2))/10;
-	  *tmp *= exp(complex<double>(0,phase));
+        auto f = [&](int x, int y, fftw_format &data){
+          auto tmp = (complex<Real>*)&data;
+	  Real phase = pi*setups.lambda*setups.d/pow(setups.pixelsize,2)*(pow((x-0.5*row)/row,2)+pow((y-0.5*column)/column,2))/10;
+	  *tmp *= exp(complex<Real>(0,phase));
 	};
         imageLoop<decltype(f)>(gkp1,&f,0);
       }
@@ -567,8 +543,8 @@ int main(int argc, char** argv )
         //setups.spt = &re;
         if(!setups.useShrinkMap) setups.spt = &cir3;
         //diffraction image, either from simulation or from experiments.
-        auto f = [&](int x, int y, fftw_complex &data){
-          auto tmp = (complex<double>*)&data;
+        auto f = [&](int x, int y, fftw_format &data){
+          auto tmp = (complex<Real>*)&data;
           bool inside = cir3.isInside(x,y);
 	  if(!inside) *tmp = 0.;
 	  *tmp *= gaussian(x-cir2.x0,y-cir2.y0,cir3.r);
@@ -577,8 +553,8 @@ int main(int argc, char** argv )
         imageLoop<decltype(f)>(gkp1,&f,0);
       }
       if(useGaussionHERALDO){
-        auto f = [&](int x, int y, fftw_complex &data){
-          auto tmp = (complex<double>*)&data;
+        auto f = [&](int x, int y, fftw_format &data){
+          auto tmp = (complex<Real>*)&data;
 	  if(cir2.isInside(x,y)) 
 		  *tmp *= gaussian(x-cir2.x0,y-cir2.y0,cir2.r*4);
 	  else *tmp = gaussian(x-cir2.x0,y-cir2.y0,cir2.r*4);
@@ -609,55 +585,54 @@ int main(int argc, char** argv )
     }
     //cir2.x0=row/2;
     //cir2.y0=column/2;
-    double decay = scale;
+    Real decay = scale;
     if(runSim) decay=1;
     std::default_random_engine generator;
     std::poisson_distribution<int> distribution(1000);
-    Mat *autocorrelation = new Mat(row,column,CV_64FC2,Scalar::all(0.));
-    shrinkingMask.image = new Mat(row,column,CV_64FC1);
+    Mat *autocorrelation = new Mat(row,column,float_cv_format(2),Scalar::all(0.));
+    shrinkingMask.image = new Mat(row,column,float_cv_format(1));
     for(int i = 0; i<row*column; i++){ //remove the phase information
-     // double randphase = arg(tmp);//static_cast<double>(rand())/RAND_MAX*2*pi;
+     // Real randphase = arg(tmp);//static_cast<Real>(rand())/RAND_MAX*2*pi;
       int tx = i/row;
       if(tx >= row/2) tx -= row/2;
       if(i/row < row/2) tx += row/2;
       int ty = i%row;
       if(ty >= column/2) ty -= column/2;
       if(i%row < column/2) ty += column/2;
-      complex<double> &data = *(complex<double>*)((fftw_complex*)targetfft->data)[i];
-      fftw_complex &datacor = ((fftw_complex*)autocorrelation->data)[i];
-      double mod = abs(data)*sqrt(decay);
+      complex<Real> &data = ((fftw_format*)targetfft->data)[i];
+      fftw_format &datacor = ((fftw_format*)autocorrelation->data)[i];
+      Real mod = abs(data)*sqrt(decay);
       if(runSim&&simCCDbit) {
         int range= pow(2,16);
-        mod = sqrt(((double)floor(pow(mod,2)*range))/(range)); //assuming we use 16bit CCD
-        //mod = sqrt(pow(mod,2)+double(distribution(generator))/range); //Poisson noise
+        mod = sqrt(((Real)floor(pow(mod,2)*range))/(range)); //assuming we use 16bit CCD
+        //mod = sqrt(pow(mod,2)+Real(distribution(generator))/range); //Poisson noise
       }
       if(1){
       if(setups.useBS && cir.isInside(tx,ty)) {
         data = 0.;
       }
       else{
-        //complex<double> tmp(targetfft[i][0],targetfft[i][1]);
-        double randphase = static_cast<double>(rand())/RAND_MAX*2*pi;
-        data = mod*exp(complex<double>(0,randphase));
+        //complex<Real> tmp(targetfft[i].real,targetfft[i].imag);
+        Real randphase = static_cast<Real>(rand())/RAND_MAX*2*pi;
+        data = mod*exp(complex<Real>(0,randphase));
       }
       }
-      //datacor[0] = pow(mod,2)*(tx-row/2)*(ty-column/2)/90; // ucore is the derivitaves of the diffraction pattern: append *(tx-row/2)*(ty-column/2)/20;
-      datacor[0] = pow(mod,2); //ucore is the diffraction pattern
-      datacor[1] = 0;
+      //datacor.real = pow(mod,2)*(tx-row/2)*(ty-column/2)/90; // ucore is the derivitaves of the diffraction pattern: append *(tx-row/2)*(ty-column/2)/20;
+      datacor = fftw_format(pow(mod,2),0); //ucore is the diffraction pattern
     }
     convertFromComplexToInteger( autocorrelation, cache, MOD,1,1,"HERALDO U core"); 
     imwrite("ucore.png",*cache);
     autocorrelation = fftw(autocorrelation, autocorrelation, 0);
     //autoCorrelationReconstruction(autocorrelation);
 
-    auto f = [&](int x, int y, double &data, fftw_complex &dataout){
-      data = hypot(dataout[1],dataout[0])>shrinkingMask.threshold;
+    auto f = [&](int x, int y, Real &data, fftw_format &dataout){
+      data = abs(dataout)>shrinkingMask.threshold;
     };
-    imageLoop<decltype(f),double,fftw_complex>(shrinkingMask.image,autocorrelation,&f,1);
-    convertFromComplexToInteger<double>(shrinkingMask.image, cache,MOD,0);
+    imageLoop<decltype(f),Real,fftw_format>(shrinkingMask.image,autocorrelation,&f,1);
+    convertFromComplexToInteger<Real>(shrinkingMask.image, cache,MOD,0);
     imwrite("mask.png",*cache);
-    //auto f = [&](int x, int y, fftw_complex &data){
-    //  auto tmp = (complex<double>*)&data;
+    //auto f = [&](int x, int y, fftw_format &data){
+    //  auto tmp = (complex<Real>*)&data;
     //  *tmp = 1.4+*tmp;
     //};
     //imageLoop<decltype(f)>(autocorrelation,&f,0);

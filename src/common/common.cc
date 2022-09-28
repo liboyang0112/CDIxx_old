@@ -5,10 +5,10 @@
 Mat* convertFromIntegerToComplex(Mat &image, Mat* cache, bool isFrequency, const char* label){
   int row = image.rows;
   int column = image.cols;
-  if(!cache) cache = new Mat(row, column, CV_64FC2);
-  double tot = 0;
+  if(!cache) cache = new Mat(row, column, float_cv_format(2));
+  Real tot = 0;
   pixeltype* rowp;
-  fftw_complex* rowo;
+  fftw_format* rowo;
   int targetx, targety;
   for(int x = 0; x < row ; x++){
     if(isFrequency){
@@ -17,18 +17,17 @@ Mat* convertFromIntegerToComplex(Mat &image, Mat* cache, bool isFrequency, const
       targetx = x;
     }
     rowp = image.ptr<pixeltype>(x);
-    rowo = cache->ptr<fftw_complex>(targetx);
+    rowo = cache->ptr<fftw_format>(targetx);
     for(int y = 0; y<column; y++){
       if(isFrequency){
         targety = y<column/2?y+column/2:(y-column/2);
       }else{
 	targety = y;
       }
-      double intensity = ((double)rowp[y])/(rcolor-1);
-      fftw_complex &datatmp = rowo[targety];
+      Real intensity = ((Real)rowp[y])/(rcolor-1);
+      fftw_format &datatmp = rowo[targety];
       if(opencv_reverted) intensity = 1-intensity;
-      datatmp[0] = sqrt(intensity);
-      datatmp[1] = 0;
+      datatmp = fftw_format(sqrt(intensity),0);
       tot += sqrt(intensity);
     }
   }
@@ -39,66 +38,64 @@ Mat* convertFromIntegerToComplex(Mat &image, Mat* cache, bool isFrequency, const
 Mat* convertFromIntegerToComplex(Mat &image,Mat &phase,Mat* cache){
   int row = image.rows;
   int column = image.cols;
-  if(!cache) cache = new Mat(row, column, CV_64FC2);
+  if(!cache) cache = new Mat(row, column, float_cv_format(2));
   int tot = 0;
   pixeltype *rowi, *rowp;
-  fftw_complex *rowo;
+  fftw_format *rowo;
   for(int x = 0; x < row ; x++){
     rowi = image.ptr<pixeltype>(x);
     rowp = phase.ptr<pixeltype>(x);
-    rowo = phase.ptr<fftw_complex>(x);
+    rowo = phase.ptr<fftw_format>(x);
     for(int y = 0; y<column; y++){
       tot += rowp[y];
-      double phase = rowp[y];
+      Real phase = rowp[y];
       //phase*=2*pi/rcolor;
       //phase-=pi;
-      phase = static_cast<double>(rand())/RAND_MAX*2*pi;
-      rowo[y][0] = sqrt(((double)rowi[y])/rcolor)*cos(phase);
-      rowo[y][1] = sqrt(((double)rowi[y])/rcolor)*sin(phase);
+      phase = static_cast<Real>(rand())/RAND_MAX*2*pi;
+      rowo[y] = fftw_format(sqrt(((Real)rowi[y])/rcolor)*cos(phase),sqrt(((Real)rowi[y])/rcolor)*sin(phase));
     }
   }
   printf("total intensity: %d\n", tot);
   return cache;
 }
-double getVal(mode m, fftw_complex &data){
-  complex<double> &tmpc = *(complex<double>*)(data);
+Real getVal(mode m, fftw_format &data){
   switch(m){
     case MOD:
-      return std::abs(tmpc);
+      return std::abs(data);
       break;
     case MOD2:
-      return pow(std::abs(tmpc),2);
+      return pow(std::abs(data),2);
       break;
     case IMAG:
-      return tmpc.imag();
+      return data.imag();
       break;
     case PHASE:
-      if(std::abs(tmpc)==0) return 0;
-      return (std::arg(tmpc)+pi)/2/pi;
+      if(std::abs(data)==0) return 0;
+      return (std::arg(data)+pi)/2/pi;
       break;
     default:
-      return tmpc.real();
+      return data.real();
   }
 }
-double getVal(mode m, double &data){
+Real getVal(mode m, Real &data){
   return data;
 }
 
-Mat* multiWLGen(Mat* original, Mat* output, double m, double step, double dphilambda, double *spectrum){ //original image, ratio between long lambda and short lambda.
+Mat* multiWLGen(Mat* original, Mat* output, Real m, Real step, Real dphilambda, Real *spectrum){ //original image, ratio between long lambda and short lambda.
 	int startx = 0;
 	int starty = 0;
-	if(!output) output = new Mat(original->rows/m,original->cols/m, CV_64FC2);
-	Mat *merged = new Mat(original->rows/m,original->cols/m, CV_64FC2);
+	if(!output) output = new Mat(original->rows/m,original->cols/m, float_cv_format(2));
+	Mat *merged = new Mat(original->rows/m,original->cols/m, float_cv_format(2));
 	int max = original->rows*(1-1./m)/2;
-	double weight = step/max;
+	Real weight = step/max;
 	for(int im = 0; im < max; im+=step){ // im = 0, m*lambda, im=max lambda.
 		startx = starty = im;
 		resize((*original)(Range(startx, original->rows-startx),Range(starty, original->cols-starty)), *merged,merged->size());
-		double scale = double(output->rows)/(original->rows-2*im);
+		Real scale = Real(output->rows)/(original->rows-2*im);
 		if(dphilambda!=0){
-			double dphi = 2*scale*dphilambda;
-        		auto f = [&](int x, int y, complex<double> &data){ data = abs(data)*exp(complex<double>(0,dphi)); };
-        		imageLoop<decltype(f), complex<double>>(merged, &f);
+			Real dphi = 2*scale*dphilambda;
+        		auto f = [&](int x, int y, complex<Real> &data){ data = abs(data)*exp(complex<Real>(0,dphi)); };
+        		imageLoop<decltype(f), complex<Real>>(merged, &f);
 		}
 		merged = fftw(merged,merged,1);
 		if(im == 0) {
@@ -111,19 +108,19 @@ Mat* multiWLGen(Mat* original, Mat* output, double m, double step, double dphila
 	return output;
 }
 
-Mat* multiWLGenAVG(Mat* original, Mat* output, double m, double step, double *spectrum){ //original image, ratio between long lambda and short lambda.
+Mat* multiWLGenAVG(Mat* original, Mat* output, Real m, Real step, Real *spectrum){ //original image, ratio between long lambda and short lambda.
 	int startx = 0;
 	int starty = 0;
 	if(!output) output = new Mat(original->rows/m,original->cols/m, CV_16UC1);
 	Mat* mergedf = fftw(original,0,1);
 	int max = original->rows*(1-1./m)/2;
-	double weight = step/max;
-        auto f = [&](int x, int y, complex<double> &data){ data = pow(abs(data),2); };
-        //imageLoop<decltype(f), complex<double>>(mergedf, &f);
-        //auto f1 = [&](int x, int y, complex<double> &data){ data = pow(abs(data),2); };
-        imageLoop<decltype(f), complex<double>>(mergedf, &f);
+	Real weight = step/max;
+        auto f = [&](int x, int y, complex<Real> &data){ data = pow(abs(data),2); };
+        //imageLoop<decltype(f), complex<Real>>(mergedf, &f);
+        //auto f1 = [&](int x, int y, complex<Real> &data){ data = pow(abs(data),2); };
+        imageLoop<decltype(f), complex<Real>>(mergedf, &f);
 	Mat *autocorrelation = fftw(mergedf,0,0);
-	Mat *mergedt = convertFO<complex<double>>(autocorrelation);
+	Mat *mergedt = convertFO<complex<Real>>(autocorrelation);
 	Mat *singletmp = 0;
 	for(int im = 0; im < max; im+=step){ // im = 0, m*lambda, im=max lambda.
 		startx = starty = im;
@@ -135,7 +132,7 @@ Mat* multiWLGenAVG(Mat* original, Mat* output, double m, double step, double *sp
 			imwrite("cropmid.png",*tmpwrite);
 			delete tmpwrite, singletmp;
 		}
-		double scale = double(mergedtmp->rows)/(original->rows-2*im);
+		Real scale = Real(mergedtmp->rows)/(original->rows-2*im);
 		if(im == 0) {
 			mergedtmp->copyTo(*output);
 			normalize(*output,*output,weight*scale);
@@ -147,23 +144,23 @@ Mat* multiWLGenAVG(Mat* original, Mat* output, double m, double step, double *sp
 	output = fftw(output,output,1);
 	return output;
 }
-void addMatComponent_area(Sparse *matrix, Size sz, int x, int y, double scale, double midx, double midy, double weighttot){
-	double newx = (x-midx) * scale + midx;
-	double newy = (y-midy) * scale + midy;
+void addMatComponent_area(Sparse *matrix, Size sz, int x, int y, Real scale, Real midx, Real midy, Real weighttot){
+	Real newx = (x-midx) * scale + midx;
+	Real newy = (y-midy) * scale + midy;
 	//printf("(%d,%d),[%f,%f],%f\n",x,y,newx,newy,scale);
 	int idx = x*sz.width + y;
-	double halfwidth = scale/2;
-	double hfm5 = halfwidth-0.5;
-	double hfp5 = halfwidth+0.5;
+	Real halfwidth = scale/2;
+	Real hfm5 = halfwidth-0.5;
+	Real hfp5 = halfwidth+0.5;
 	if(newx <= -hfp5 || newx >= sz.height+hfp5|| newy <= -hfp5 || newy >= sz.width+hfp5) return;
-	double density = 1./scale/scale;
+	Real density = 1./scale/scale;
 	int startx = floor(newx-hfm5); //for these pixels, matrix[i+j*row][x+y*row] += density;
 	int starty = floor(newy-hfm5);
 	int endx = ceil(newx+hfm5);
 	int endy = ceil(newy+hfm5);
 	int cord[] = {0,idx};
 	for(int i = max(0,startx); i <= min(sz.height-1,endx); i++){
-		double wtx = 1;
+		Real wtx = 1;
 		if(startx!=endx){
 			if(i == startx) wtx=startx-newx+hfp5;
 			if(i == endx) wtx=newx+hfp5-endx;
@@ -172,7 +169,7 @@ void addMatComponent_area(Sparse *matrix, Size sz, int x, int y, double scale, d
 		}
 		for(int j = max(0,starty); j <= min(sz.width-1,endy); j++){
 			cord[0] = i*sz.width+j;
-			double weight = wtx;
+			Real weight = wtx;
 			if(starty!=endy){
 				if(j == starty) weight*=starty-newy+hfp5;
 				if(j == endy) weight*=newy+hfp5-endy;
@@ -184,19 +181,19 @@ void addMatComponent_area(Sparse *matrix, Size sz, int x, int y, double scale, d
 		}
 	}
 }
-void addMatComponent_Interpolate(Sparse *matrix, Size sz, int x, int y, double scale, double midx, double midy, double weighttot){
-	double newx = (x-midx) * scale + midx;
-	double newy = (y-midy) * scale + midy;
+void addMatComponent_Interpolate(Sparse *matrix, Size sz, int x, int y, Real scale, Real midx, Real midy, Real weighttot){
+	Real newx = (x-midx) * scale + midx;
+	Real newy = (y-midy) * scale + midy;
 	//printf("(%d,%d),[%f,%f],%f\n",x,y,newx,newy,scale);
 	int idx = x*sz.width + y;
 	if(newx <= -1 || newx >= sz.height|| newy <= -1 || newy >= sz.width) return;
-	double density = 1./scale/scale;
+	Real density = 1./scale/scale;
 	int startx = floor(newx); //for these pixels, matrix[i+j*row][x+y*row] += density;
 	int starty = floor(newy);
-	double dx = newx-startx;
-	double dy = newy-starty;
+	Real dx = newx-startx;
+	Real dy = newy-starty;
 	int cord[] = {idx,startx*sz.width + starty};
-	double tmp = (1-dx)*(1-dy)*density;
+	Real tmp = (1-dx)*(1-dy)*density;
 	if(tmp!=0) (*matrix)[cord] += tmp;
 	cord[1] += 1;
 	tmp = (1-dx)*dy*density;
@@ -208,88 +205,143 @@ void addMatComponent_Interpolate(Sparse *matrix, Size sz, int x, int y, double s
 	tmp = density*dx*(1-dy);
 	if(tmp!=0) (*matrix)[cord] += tmp;
 }
-Mat* multiWLGenAVG_MAT(Mat* original, Mat* output, double m, double step, double *spectrum){ //original image, ratio between long lambda and short lambda.
+Mat* multiWLGenAVG_MAT(Mat* original, Mat* output, Real m, Real step, Real *spectrum){ //original image, ratio between long lambda and short lambda.
 	int startx = 0;
 	int starty = 0;
 	Mat* mergedf = fftw(original,0,1);
-	double weight = 1./pow(2,2);//step/(1-1./m);
-        auto f = [&](int x, int y, complex<double> &data){ data = pow(abs(data),2); };
-        imageLoop<decltype(f), complex<double>>(mergedf, &f);
-	output = convertFO<complex<double>>(mergedf);
+	Real weight = 1./pow(2,2);//step/(1-1./m);
+        auto f = [&](int x, int y, complex<Real> &data){ data = pow(abs(data),2); };
+        imageLoop<decltype(f), complex<Real>>(mergedf, &f);
+	output = convertFO<complex<Real>>(mergedf);
 	//build C matrix
 	Sparse *matrix = new Sparse(original->total(),original->total());
 	printf("rl=%f, max=%f, step=%f\n",1.,m,step);
-	//for(double rl = 0.3; rl > 1./m-0.01; rl -= step){
-	double rl = 2;
+	//for(Real rl = 0.3; rl > 1./m-0.01; rl -= step){
+	Real rl = 2;
 	for(int idx = 0; idx < original->total(); idx++){
 	//int idx = original->cols*300+300;
-		addMatComponent_area(matrix, original->size(), idx/original->cols, idx%original->cols, rl, double(original->rows)/2-0.5, double(original->cols)/2-0.5,weight);
-		//addMatComponent_Interpolate(matrix, original->size(), idx/original->cols, idx%original->cols, rl, double(original->rows)/2, double(original->cols)/2,weight);
+		addMatComponent_area(matrix, original->size(), idx/original->cols, idx%original->cols, rl, Real(original->rows)/2-0.5, Real(original->cols)/2-0.5,weight);
+		//addMatComponent_Interpolate(matrix, original->size(), idx/original->cols, idx%original->cols, rl, Real(original->rows)/2, Real(original->cols)/2,weight);
 	}
 		printf("size = %lu, ratio=%f\n",matrix->matrix.size(),rl);
 	//}
 	//multiply the matrix
-	complex<double>* y = (*matrix)*(complex<double>*)(output->data);
-	memcpy(output->data, y, sizeof(complex<double>)*output->total());
+	complex<Real>* y = (*matrix)*(complex<Real>*)(output->data);
+	memcpy(output->data, y, sizeof(complex<Real>)*output->total());
 	delete y;
 	delete mergedf;
 	return output;
 }
-Mat* multiWLGenAVG_MAT_AC(Mat* original, Mat* output, double m, double step, double *spectrum){ //original image, ratio between long lambda and short lambda.
+Mat* multiWLGenAVG_MAT_AC(Mat* original, Mat* output, Real m, Real step, Real *spectrum){ //original image, ratio between long lambda and short lambda.
 	int startx = 0;
 	int starty = 0;
 	Mat* mergedf = fftw(original,0,1);
 	if(output) delete output;
-	double weight = 1./16;//step/(1-1./m);
-        auto f = [&](int x, int y, complex<double> &data){ data = pow(abs(data),2); };
-        imageLoop<decltype(f), complex<double>>(mergedf, &f);
+	Real weight = 1./16;//step/(1-1./m);
+        auto f = [&](int x, int y, complex<Real> &data){ data = pow(abs(data),2); };
+        imageLoop<decltype(f), complex<Real>>(mergedf, &f);
 	Mat *autocorrelation = fftw(mergedf,0,0);
-	Mat *mergedt = convertFO<complex<double>>(autocorrelation);
+	Mat *mergedt = convertFO<complex<Real>>(autocorrelation);
 	//build C matrix
 	Sparse *matrix = new Sparse(original->total(),original->total());
 	printf("rl=%f, max=%f, step=%f\n",1.,m,step);
-	//for(double rl = 0.3; rl > 1./m-0.01; rl -= step){
-	double rl = 0.5;
+	//for(Real rl = 0.3; rl > 1./m-0.01; rl -= step){
+	Real rl = 0.5;
 	for(int idx = 0; idx < original->total(); idx++){
 	//int idx = original->cols*305+305;
-		addMatComponent_area(matrix, original->size(), idx/original->cols, idx%original->cols, rl, double(original->rows)/2, double(original->cols)/2,weight);
-		//addMatComponent_Interpolate(matrix, original->size(), idx/original->cols, idx%original->cols, rl, double(original->rows)/2, double(original->cols)/2,weight);
+		addMatComponent_area(matrix, original->size(), idx/original->cols, idx%original->cols, rl, Real(original->rows)/2, Real(original->cols)/2,weight);
+		//addMatComponent_Interpolate(matrix, original->size(), idx/original->cols, idx%original->cols, rl, Real(original->rows)/2, Real(original->cols)/2,weight);
 	}
 		printf("size = %lu, ratio=%f\n",matrix->matrix.size(),rl);
 	//}
-	complex<double>* y = (*matrix)*(complex<double>*)(mergedt->data);
-	memcpy(mergedf->data, y, sizeof(complex<double>)*mergedf->total());
+	complex<Real>* y = (*matrix)*(complex<Real>*)(mergedt->data);
+	memcpy(mergedf->data, y, sizeof(complex<Real>)*mergedf->total());
 	autocorrelation = fftw(mergedf,autocorrelation,1);
-	output = convertFO<complex<double>>(autocorrelation);
+	output = convertFO<complex<Real>>(autocorrelation);
 	delete autocorrelation;
 	delete y;
 	delete mergedf;
 	delete mergedt;
 	return output;
 }
-Mat* multiWLGenAVG_MAT_FFT(Mat* original, Mat* output, double m, double step, double *spectrum){ //original image, ratio between long lambda and short lambda.
-	int startx = 0;
-	int starty = 0;
-	Mat* mergedf = fftw(original,0,1);
-	if(output) delete output;
-	double weight = 1./16;//step/(1-1./m);
-        auto f = [&](int x, int y, complex<double> &data){ data = pow(abs(data),2); };
-        imageLoop<decltype(f), complex<double>>(mergedf, &f);
-	Mat *autocorrelation = fftw(mergedf,0,0);
-	Mat *mergedt = convertFO<complex<double>>(autocorrelation);
+Mat* multiWLGenAVG_MAT_FFT(Mat* original, Mat* output, Real m, Real step, Real *spectrum){ //original image, ratio between long lambda and short lambda.
+	output = fftw(original,output,1);
+	Real weight = 1./16;//step/(1-1./m);
+        auto f = [&](int x, int y, complex<Real> &data){ data = pow(abs(data),2); };
+        imageLoop<decltype(f), complex<Real>>(output, &f);
+	Mat *mergedt = convertFO<complex<Real>>(output);
 	//build C matrix
 	Sparse *matrix = new Sparse(original->total(),original->total());
 	printf("rl=%f, max=%f, step=%f\n",1.,m,step);
-	//for(double rl = 0.3; rl > 1./m-0.01; rl -= step){
-	int padding = 2;
+	//for(Real rl = 0.3; rl > 1./m-0.01; rl -= step){
+	int padding = 1;
 	matrixGen(matrix, original->rows, original->cols, padding, padding);
 	printf("size = %lu, padding=%d\n",matrix->matrix.size(),padding);
-	complex<double>* y = (*matrix)*(complex<double>*)(mergedt->data);
-	memcpy(mergedf->data, y, sizeof(complex<double>)*mergedf->total());
+	complex<Real>* y = (*matrix)*((complex<Real>*)(mergedt->data));
+	memcpy(mergedt->data, y, sizeof(complex<Real>)*mergedt->total());
+	convertFO<complex<Real>>(mergedt,output);
+	delete y;
+	delete mergedt;
+	return output;
+}
+Mat* multiWLGenAVG_MAT_AC_FFT(Mat* original, Mat* output, Real m, Real step, Real *spectrum){ //original image, ratio between long lambda and short lambda.
+	Mat* mergedf = fftw(original,0,1);
+	if(output) delete output;
+	Real weight = 1./16;//step/(1-1./m);
+        auto f = [&](int x, int y, complex<Real> &data){ data = pow(abs(data),2); };
+        imageLoop<decltype(f), complex<Real>>(mergedf, &f);
+	Mat *autocorrelation = fftw(mergedf,0,0);
+	Mat *mergedt = convertFO<complex<Real>>(autocorrelation);
+	//Mat *mergedt = new Mat(original->rows, original->cols, float_cv_format(2), Scalar(0));
+	//mergedt->ptr<fftw_format>(299-160)[299-160] = 1;
+	//mergedt->ptr<fftw_format>(161)[161] = 1;
+	//build C matrix
+	Sparse *matrix = new Sparse(original->total(),original->total());
+	printf("rl=%f, max=%f, step=%f\n",1.,m,step);
+	double rl = 1.37;
+	double pix = original->rows*(rl-1)/2;
+	//for(Real rl = 0.3; rl > 1./m-0.01; rl -= step){
+	//matrixGen(matrix, original->rows, original->cols, 0, 0, 1);
+	//matrixGen(matrix, original->rows, original->cols, 50, 50);
+	matrixGen(matrix, original->rows, original->cols, pix, pix,1./pow(rl,2));
+	//matrixGen(matrix, original->rows, original->cols, 150, 150, 1./4);
+	//printf("size = %lu, padding=%d\n",matrix->matrix.size(),padding);
+	complex<Real>* y = matrix->TMultiply((complex<Real>*)(mergedt->data));
+	memcpy(mergedf->data, y, sizeof(complex<Real>)*mergedf->total());
 	autocorrelation = fftw(mergedf,autocorrelation,1);
-	output = convertFO<complex<double>>(autocorrelation);
+	output = convertFO<complex<Real>>(autocorrelation);
 	delete autocorrelation;
 	delete y;
+	delete mergedf;
+	delete mergedt;
+	return output;
+}
+Mat* multiWLGenAVG_AC_FFT(Mat* original, Mat* output, Real m, Real step, Real *spectrum){ //original image, ratio between long lambda and short lambda.
+	Mat* mergedf = fftw(original,0,1);
+	if(output) delete output;
+	Real weight = 1./16;//step/(1-1./m);
+        auto f = [&](int x, int y, complex<Real> &data){ data = pow(abs(data),2); };
+        imageLoop<decltype(f), complex<Real>>(mergedf, &f);
+	Mat *autocorrelation = fftw(mergedf,0,0);
+	Mat *mergedt = new Mat(original->rows, original->cols, float_cv_format(2), Scalar(0));
+	//mergedt->ptr<fftw_format>(299-160)[299-160] = 1;
+	mergedt->ptr<fftw_format>(160)[160] = 1;
+	//Mat *mergedt = convertFO<complex<Real>>(autocorrelation);
+	delete autocorrelation;
+	double r = 1.37;
+	autocorrelation = extend(*mergedt,r);
+	fftw(autocorrelation,autocorrelation,1);
+	Mat *pattern = convertFO<fftw_format>(autocorrelation);
+	int startx = original->rows*(r-1)/2;
+	int starty = original->cols*(r-1)/2;
+	Mat *tmp = new Mat((*pattern)(Range(startx, pattern->rows-startx),Range(starty, pattern->cols-starty)));
+	output = new Mat();
+	tmp->copyTo(*output);
+	delete tmp;
+	delete autocorrelation;
+	autocorrelation = fftw(output,0,0);
+	tmp = convertFromComplexToInteger(autocorrelation, 0, REAL, 0, 1, "debug", 0);
+	imwrite("debug.png",*tmp);
 	delete mergedf;
 	delete mergedt;
 	return output;

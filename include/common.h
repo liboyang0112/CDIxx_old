@@ -6,6 +6,7 @@
 #include "opencv2/highgui.hpp"
 #include <complex>
 #include "fftw3.h"
+#include "format.h"
 
 using namespace cv;
 // Declare the variables
@@ -24,37 +25,37 @@ using pixeltype=uchar;
 static const int nbits = 8;
 static const auto format_cv = CV_8UC1;
 #endif
+using fftw_format=complex<Real>;
 //using inputtype=uchar;
 //static const int inputbits = 8;
 
 static const int rcolor = pow(2,nbits);
 static bool opencv_reverted = 0;
-static const double scale = 1;
+static const Real scale = 1;
 
-const double pi = 3.1415927;
+const Real pi = 3.1415927;
 enum mode {MOD2,MOD, REAL, IMAG, PHASE};
 
-double getVal(mode m, fftw_complex &data);
-double getVal(mode m, double &data);
-template<typename T=fftw_complex>
-Mat* convertFromComplexToInteger(Mat *fftwImage, Mat* opencvImage = 0, mode m = MOD, bool isFrequency = 0, double decay = 1, const char* label= "default",bool islog = 0){
+Real getVal(mode m, fftw_format &data);
+Real getVal(mode m, Real &data);
+template<typename T=fftw_format>
+Mat* convertFromComplexToInteger(Mat *fftwImage, Mat* opencvImage = 0, mode m = MOD, bool isFrequency = 0, Real decay = 1, const char* label= "default",bool islog = 0){
   pixeltype* rowo;
   T* rowp;
   int row = fftwImage->rows;
   int column = fftwImage->cols;
   if(!opencvImage) opencvImage = new Mat(row,column,format_cv);
-  double tot = 0;
-  double max = 0;
+  Real tot = 0;
+  Real max = 0;
   for(int x = 0; x < row ; x++){
     int targetx = x;
     if(isFrequency) targetx = x<row/2?x+row/2:(x-row/2);
     rowo = opencvImage->ptr<pixeltype>(targetx);
     rowp = fftwImage->ptr<T>(x);
     for(int y = 0; y<column; y++){
-      double target = getVal(m, rowp[y]);
+      Real target = getVal(m, rowp[y]);
       tot += target;
       if(max < target) max = target;
-      if(target<0) target = -target;
       if(islog){
         if(target!=0)
           target = log2(target)*rcolor/log2(rcolor)+rcolor;
@@ -62,6 +63,7 @@ Mat* convertFromComplexToInteger(Mat *fftwImage, Mat* opencvImage = 0, mode m = 
 	
       }
       else target*=rcolor*decay;
+      if(target<0) target = -target;
 
       if(target>=rcolor) {
 	      //printf("larger than maximum of %s png %f\n",label, target);
@@ -81,7 +83,7 @@ Mat* convertFromComplexToInteger(Mat *fftwImage, Mat* opencvImage = 0, mode m = 
 
 Mat* convertFromIntegerToComplex(Mat &image, Mat* cache = 0, bool isFrequency = 0, const char* label= "default");
 Mat* convertFromIntegerToComplex(Mat &image,Mat &phase,Mat* cache = 0);
-template<typename functor, typename format=fftw_complex>
+template<typename functor, typename format=fftw_format>
 void imageLoop(Mat* data, void* arg, bool isFrequency = 0){
   int row = data->rows;
   int column = data->cols;
@@ -117,13 +119,15 @@ void imageLoop(Mat* data, Mat* dataout, void* arg, bool isFrequency = 0){
     }
   }
 }
-Mat* extend( Mat &src , double ratio, double val = 0);
-Mat* multiWLGen(Mat* original, Mat* merged, double m, double step = 1, double dphaselambda = 0, double *spectrum = 0);
-Mat* multiWLGenAVG(Mat* original, Mat* merged, double m, double step = 1, double *spectrum = 0);
-Mat* multiWLGenAVG_MAT(Mat* original, Mat* merged, double m, double step = 1, double *spectrum = 0);
-Mat* multiWLGenAVG_MAT_AC(Mat* original, Mat* merged, double m, double step = 1, double *spectrum = 0);
-Mat* multiWLGenAVG_MAT_FFT(Mat* original, Mat* merged, double m, double step = 1, double *spectrum = 0);
-template<typename T = complex<double>>
+Mat* extend( Mat &src , Real ratio, Real val = 0);
+Mat* multiWLGen(Mat* original, Mat* merged, Real m, Real step = 1, Real dphaselambda = 0, Real *spectrum = 0);
+Mat* multiWLGenAVG(Mat* original, Mat* merged, Real m, Real step = 1, Real *spectrum = 0);
+Mat* multiWLGenAVG_MAT(Mat* original, Mat* merged, Real m, Real step = 1, Real *spectrum = 0);
+Mat* multiWLGenAVG_MAT_AC(Mat* original, Mat* merged, Real m, Real step = 1, Real *spectrum = 0);
+Mat* multiWLGenAVG_MAT_FFT(Mat* original, Mat* merged, Real m, Real step = 1, Real *spectrum = 0);
+Mat* multiWLGenAVG_MAT_AC_FFT(Mat* original, Mat* merged, Real m, Real step = 1, Real *spectrum = 0);
+Mat* multiWLGenAVG_AC_FFT(Mat* original, Mat* merged, Real m, Real step = 1, Real *spectrum = 0);
+template<typename T = complex<Real>>
 Mat* convertFO(Mat* mat, Mat* cache = 0){
 	int rows = mat->rows;
 	int cols = mat->cols;

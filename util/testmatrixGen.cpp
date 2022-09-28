@@ -57,5 +57,5 @@ void matrixGen(Sparse *matrix, int rows, int cols, int paddingx, int paddingy){
 }
 */
 int main(){
-	matrixGen(new Sparse(250000,250000),500,500,2,2);
+	matrixGen(new Sparse(250000,250000),500,500,2,2,1);
 }
