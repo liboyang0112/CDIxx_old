@@ -150,21 +150,24 @@ __global__ void applyNorm(complexFormat* data){
   data[index].y*=1./sqrtf(cuda_row*cuda_column);
 }
 
-__global__ void applyMod(complexFormat* source, complexFormat* target, ImageMask *bs = 0, bool loose=0){
+__global__ void applyMod(complexFormat* source, complexFormat* target, ImageMask *bs = 0, bool loose=0, int iter = 0){
   assert(source!=0);
   assert(target!=0);
   int x = blockIdx.x * blockDim.x + threadIdx.x;
   int y = blockIdx.y * blockDim.y + threadIdx.y;
   if(x >= cuda_row || y >= cuda_column) return;
-  if(loose && bs && bs->isInside(x,y)) return;
-  Real tolerance = 1./cuda_rcolor*cuda_scale;//+30./cuda_rcolor; // fluctuation caused by bit depth and noise
   Real maximum = pow(mergeDepth,2)*cuda_scale*0.99;
   int index = x*cuda_column + y;
   complexFormat targetdata = target[index];
+  Real mod2 = targetdata.x*targetdata.x + targetdata.y*targetdata.y;
+  if(loose && bs && bs->isInside(x,y)) {
+	  if(iter > 500) return;
+	  else mod2 = maximum+1;
+  }
+  Real tolerance = 1./cuda_rcolor*cuda_scale;//+30./cuda_rcolor; // fluctuation caused by bit depth and noise
   complexFormat sourcedata = source[index];
   Real ratiox = 1;
   Real ratioy = 1;
-  Real mod2 = targetdata.x*targetdata.x + targetdata.y*targetdata.y;
   Real srcmod2 = sourcedata.x*sourcedata.x + sourcedata.y*sourcedata.y;
   if(mod2>=maximum) {
     if(loose) mod2 = max(maximum,srcmod2);
@@ -374,11 +377,11 @@ void phaseRetrieve( experimentConfig &setups, Mat* targetfft, Mat* gkp1 = 0, Mat
 	}
       }
       now = std::chrono::high_resolution_clock::now();
-      if(useBS) applyMod<<<numBlocks,threadsPerBlock>>>(cuda_fftresult,cuda_targetfft,cir.cuda, !setups.reconAC || iter > 1000);  //apply mod to fftresult, Pm
-      else applyMod<<<numBlocks,threadsPerBlock>>>(cuda_fftresult,cuda_targetfft,0, !setups.reconAC || iter > 1000);  //apply mod to fftresult, Pm
+      if(useBS) applyMod<<<numBlocks,threadsPerBlock>>>(cuda_fftresult,cuda_targetfft,cir.cuda, !setups.reconAC || iter > 1000,iter);  //apply mod to fftresult, Pm
+      else applyMod<<<numBlocks,threadsPerBlock>>>(cuda_fftresult,cuda_targetfft,0, !setups.reconAC || iter > 1000,iter);  //apply mod to fftresult, Pm
       if(useDM) {
-        if(useBS) applyMod<<<numBlocks,threadsPerBlock>>>(cuda_pmpsg,cuda_targetfft,cir.cuda, !setups.reconAC || iter > 1000);  
-        else applyMod<<<numBlocks,threadsPerBlock>>>(cuda_pmpsg,cuda_targetfft,0, !setups.reconAC || iter > 1000);
+        if(useBS) applyMod<<<numBlocks,threadsPerBlock>>>(cuda_pmpsg,cuda_targetfft,cir.cuda, !setups.reconAC || iter > 1000,iter);  
+        else applyMod<<<numBlocks,threadsPerBlock>>>(cuda_pmpsg,cuda_targetfft,0, !setups.reconAC || iter > 1000, iter);
       }
       //cudaDeviceSynchronize();
       time_applyMod+=std::chrono::high_resolution_clock::now()-now;
@@ -625,7 +628,7 @@ int main(int argc, char** argv )
 
 
     auto seed = (unsigned)time(NULL);
-    bool isFresnel = 0;
+    bool isFresnel = 1;
     bool doIteration = 1;
     bool useGaussionLumination = 0;
     bool useGaussionHERALDO = 0;
@@ -634,7 +637,7 @@ int main(int argc, char** argv )
 
     srand(seed);
     printf("seed:%d\n",seed);
-    Real oversampling = 1.37*2;
+    Real oversampling = 3;
     Real padAutoCorrelation = 0;
     Mat* gkp1 = 0;
     Mat* targetfft = 0;
@@ -667,6 +670,8 @@ int main(int argc, char** argv )
 	    row*=oversampling;
 	    column*=oversampling;
     }
+    cudaMemcpyToSymbol(cuda_row,&row,sizeof(row));
+    cudaMemcpyToSymbol(cuda_column,&column,sizeof(column));
 
     C_circle cir,cir2,cir3;
     //cir is the beam stop
@@ -675,7 +680,7 @@ int main(int argc, char** argv )
     //cir.r=50;
     cir.x0=row/2;
     cir.y0=column/2;
-    cir.r=20;
+    cir.r=15;
     //cir2.x0 = column*2/3-50;
     //cir2.y0 = row*2/3+110;
     //cir2.r = 50;
@@ -703,7 +708,7 @@ int main(int argc, char** argv )
     shrinkingMask.threshold = 0.1;
     setups.useDM = 0;
 
-    setups.useBS = 0;
+    setups.useBS = 1;
     ImageMask beamStop;
     beamStop.threshold = 0.5;
     beamStop.init_image(new Mat(row,column,float_cv_format(1)));
@@ -828,6 +833,8 @@ int main(int argc, char** argv )
     if(padAutoCorrelation) {
       row*=padAutoCorrelation;
       column*=padAutoCorrelation;
+      cudaMemcpyToSymbol(cuda_row,&row,sizeof(row));
+      cudaMemcpyToSymbol(cuda_column,&column,sizeof(column));
       Mat* tmp = convertFO<complex<Real>>(autocorrelation);
       delete autocorrelation;
       autocorrelation = extend(*tmp,padAutoCorrelation);
@@ -837,8 +844,6 @@ int main(int argc, char** argv )
       gkp1 = 0;
       delete tmp;
     }
-    cudaMemcpyToSymbol(cuda_row,&row,sizeof(row));
-    cudaMemcpyToSymbol(cuda_column,&column,sizeof(column));
     cudaMemcpyToSymbol(cuda_rcolor,&rcolor,sizeof(rcolor));
     //Real tmp = scale*10;
     cudaMemcpyToSymbol(cuda_scale,&scale,sizeof(scale));
@@ -890,7 +895,7 @@ int main(int argc, char** argv )
       }
     }
 
-    convertFromComplexToInteger<Real>(shrinkingMask.image, cache,MOD,0);
+    convertFromComplexToInteger<Real>(beamStop.image, cache,MOD,0);
     imwrite("mask.png",*cache);
     //auto f = [&](int x, int y, fftw_format &data){
     //  auto tmp = (complex<Real>*)&data;
@@ -905,6 +910,8 @@ int main(int argc, char** argv )
     imwrite("init_phase.png",*cache);
     convertFromComplexToInteger(targetfft, cache, MOD2,1,1,"Pattern MOD2");
     imwrite("init_pattern.png",*cache);
+    convertFromComplexToInteger(targetfft, cache, MOD2,1,1,"Pattern MOD2",1);
+    imwrite("init_logpattern.png",*cache);
     //if(runSim) targetfft = convertFromIntegerToComplex(*cache, targetfft, 1 , "waveFront");
     convertFromComplexToInteger(autocorrelation, cache, REAL,1,1,"Autocorrelation MOD2",1);
     imwrite("auto_correlation.png",*cache);
