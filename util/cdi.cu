@@ -48,17 +48,6 @@ Real gaussian_norm(Real x, Real y, Real sigma){
   return 1./(2*pi*sigma*sigma)*gaussian(x,y,sigma);
 }
 
-
-void maskOperation(Mat &input, Mat &output, Mat &kernel){
-  filter2D(input, output, input.depth(), kernel);
-}
-
-
-class support{
-public:
-  support(){};
-  __device__ __host__ virtual bool isInside(int x, int y) = 0;
-};
 class ImageMask{
 public:
   int nrow;
@@ -198,30 +187,6 @@ __global__ void multiplyPatternPhase_Device(complexFormat* amp, Real r_d_lambda,
   amp[index].y = p.y;
 }
 
-Mat* createWaveFront(Mat &intensity, Mat &phase, int rows, int columns, Mat* &itptr, Mat* wavefront = 0){
-  if(intensity.rows!=phase.rows || intensity.cols!=phase.cols) {
-    printf("intensity map and phase map having different dimensions");
-    exit(0);
-  }
-  columns = intensity.cols;
-  rows = intensity.rows;
-  Mat *imageptr;
-  itptr = &intensity;
-  Mat &intensity_sc = *itptr;
-  if(phase.channels()==3){
-    imageptr = new Mat(rows, columns, format_cv);
-    cv::cvtColor(phase, *imageptr, cv::COLOR_BGR2GRAY);
-  }else{
-    imageptr = &phase;
-  }
-  Mat &phase_sc = *imageptr;
-  //wavefront = convertFromIntegerToComplex(intensity_sc, wavefront,0,"waveFront");
-  wavefront = convertFromIntegerToComplex(intensity_sc, *imageptr, wavefront);
-  delete imageptr;
-  return wavefront;
-  //imwrite("input.png",image);
-}
-
 __device__ void ApplyHIOSupport(bool insideS, complexFormat &rhonp1, complexFormat &rhoprime, Real beta){
   if(insideS){
     rhonp1.x = rhoprime.x;
@@ -251,7 +216,7 @@ struct experimentConfig{
   bool restart=0;
   Real lambda = 0.01;
   Real d = 16e3;
-  Real pixelsize = 6.5;
+  Real pixelsize = 26;
   Real beamspotsize = 200;
   Real enhancement = 0;
   Real forwardFactor = 0;
@@ -263,6 +228,13 @@ struct experimentConfig{
   }
   void multiplyPatternPhase(complexFormat* amp){
     multiplyPatternPhase_Device<<<numBlocks,threadsPerBlock>>>(amp, pixelsize*pixelsize*M_PI/(d*lambda), 2*d*M_PI/lambda);
+  }
+  void init(int row, int column){
+    enhancement = pow(pixelsize,4)*row*column/pow(lambda*d,2); // this guarentee energy conservation
+    enhancement *= 0.2; //too strong in the middle
+    fresnelFactor = lambda*d/pow(pixelsize,2)/row/column;
+    forwardFactor = fresnelFactor*enhancement;
+    inverseFactor = 1./row/column/forwardFactor;
   }
 };
 
@@ -627,6 +599,7 @@ int main(int argc, char** argv )
     bool useGaussionHERALDO = 0;
     bool doCentral =0;
     bool useRectHERALDO = 0;
+    bool doKCDI = 1;
 
     srand(seed);
     printf("seed:%d\n",seed);
@@ -642,8 +615,8 @@ int main(int argc, char** argv )
     }
     int row, column;
     Mat intensity = readImage( argv[2] , !runSim);
-    //maskOperation(intensity,intensity);
     //Mat ele = getStructuringElement(MORPH_RECT,Size(3,3),Point(1,1));
+    //filter2D(intensity, intensity, intensity.depth(), ele);
     //erode( intensity, intensity, ele);
     //dilate( intensity, intensity, ele);
     row = intensity.rows;
@@ -714,7 +687,7 @@ int main(int argc, char** argv )
     beamStop.updateCuda();
 
     //-----------------------configure experiment setups-----------------------------
-    experimentConfig setups;
+    experimentConfig setups, setupsKCDI;
     setups.reconAC = 0;
     setups.useShrinkMap = 1;
     setups.useDM = 0;
@@ -725,12 +698,9 @@ int main(int argc, char** argv )
     setups.beamStop = &beamStop;//&cir;
     setups.restart = restart;
     setups.d = oversampling*setups.pixelsize*setups.beamspotsize/setups.lambda; //distance to guarentee oversampling
+    //setupsKCDI.d = 
     //setups.pixelsize = 7;//setups.d/oversampling/setups.beamspotsize*setups.lambda;
-    setups.enhancement = pow(setups.pixelsize,4)*row*column/pow(setups.lambda*setups.d,2); // this guarentee energy conservation
-    setups.enhancement *= 0.2; //too strong in the middle
-    setups.fresnelFactor = setups.lambda*setups.d/pow(setups.pixelsize,2)/row/column;
-    setups.forwardFactor = setups.fresnelFactor*setups.enhancement;
-    setups.inverseFactor = 1./row/column/setups.forwardFactor;
+    setups.init(row,column);
     printf("Imaging distance = %f\n", setups.d);
     printf("Pixel size = %f\n", setups.pixelsize);
     printf("forward norm = %f\n", setups.forwardFactor);

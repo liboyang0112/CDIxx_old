@@ -1,5 +1,4 @@
 #include <complex>
-#include <fftw3-mpi.h>
 # include <cassert>
 # include <stdio.h>
 # include <time.h>
@@ -13,7 +12,6 @@
 #include "opencv2/imgproc.hpp"
 #include "opencv2/imgcodecs.hpp"
 #include "opencv2/highgui.hpp"
-#include "cufft.h"
 
 #include "common.h"
 #include <ctime>
@@ -26,11 +24,6 @@ using std::chrono::system_clock;
 
 // This code only apply to image with height and width in power of 2, i.e. ... 256, 512, 1024, .... due to Cuda restrictions.
 //#define Bits 16
-__device__ __constant__ Real cuda_beta_HIO;
-__device__ __constant__ int cuda_row;
-__device__ __constant__ int cuda_column;
-__device__ __constant__ int cuda_rcolor;
-__device__ __constant__ Real cuda_scale;
 using namespace cv;
 Real gaussian(Real x, Real y, Real sigma){
   Real r2 = pow(x,2) + pow(y,2);
@@ -42,15 +35,6 @@ Real gaussian_norm(Real x, Real y, Real sigma){
 }
 
 /******************************************************************************/
-
-__global__ void applyNorm(cufftDoubleComplex* data){
-  int x = blockIdx.x * blockDim.x + threadIdx.x;
-  int y = blockIdx.y * blockDim.y + threadIdx.y;
-  if(x >= cuda_row || y >= cuda_column) return;
-  int index = x + y*cuda_row;
-  data[index].x*=1./sqrtf(cuda_row*cuda_column);
-  data[index].y*=1./sqrtf(cuda_row*cuda_column);
-}
 
 int main(int argc, char** argv )
 {
