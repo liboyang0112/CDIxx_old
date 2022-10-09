@@ -7,7 +7,7 @@ LOCAL_BIN=bin
 GCC=gcc-10
 CXX=g++-10 -g -D__CUDA__=1
 MPICXX=mpic++
-NVCC=nvcc -arch=compute_35 --compiler-bindir /usr/bin/g++-10
+NVCC=nvcc -arch=compute_35 --compiler-bindir /usr/bin/g++-10 -g
 
 CPP_EXE_SRC=$(wildcard util/*.cpp)
 CPP_EXE_OBJ=$(patsubst util/%.cpp, ${LOCAL_OBJ}/%.o, ${CPP_EXE_SRC})

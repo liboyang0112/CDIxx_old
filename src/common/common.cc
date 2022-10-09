@@ -45,13 +45,13 @@ Mat* convertFromIntegerToComplex(Mat &image,Mat &phase,Mat* cache){
   for(int x = 0; x < row ; x++){
     rowi = image.ptr<pixeltype>(x);
     rowp = phase.ptr<pixeltype>(x);
-    rowo = phase.ptr<fftw_format>(x);
+    rowo = cache->ptr<fftw_format>(x);
     for(int y = 0; y<column; y++){
       tot += rowp[y];
       Real phase = rowp[y];
-      //phase*=2*pi/rcolor;
-      //phase-=pi;
-      phase = static_cast<Real>(rand())/RAND_MAX*2*pi;
+      phase*=2*pi/rcolor;
+      phase-=pi;
+      phase*=0.2;
       rowo[y] = fftw_format(sqrt(((Real)rowi[y])/rcolor)*cos(phase),sqrt(((Real)rowi[y])/rcolor)*sin(phase));
     }
   }

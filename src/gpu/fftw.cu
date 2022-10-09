@@ -21,11 +21,11 @@ static complexFormat *cudaData = 0;
 static cufftHandle *plan; 
 static size_t sz;
 
-Mat* fftw ( Mat* in, Mat *out = 0, bool isforward = 1)
+Mat* fftw ( Mat* in, Mat *out, bool isforward, Real ratio)
 {
   int row = in->rows;
   int column = in->cols;
-  Real ratio = 1./sqrt(row*column);
+  if(ratio==0) ratio = 1./sqrt(row*column);
   if(out == 0) out = new Mat(row,column,float_cv_format(2));
 
   if(cudaData==0) {

@@ -36,6 +36,7 @@ using std::chrono::seconds;
 using std::chrono::system_clock;
 
 cufftHandle *plan = new cufftHandle();
+static dim3 numBlocks;
 //#define Bits 16
 using namespace cv;
 Real gaussian(Real x, Real y, Real sigma){
@@ -141,13 +142,13 @@ Mat* gaussianKernel(int rows, int cols, Real sigma){
   
   return image;
 }
-__global__ void applyNorm(complexFormat* data){
+__global__ void applyNorm(complexFormat* data, double factor){
   int x = blockIdx.x * blockDim.x + threadIdx.x;
   int y = blockIdx.y * blockDim.y + threadIdx.y;
   if(x >= cuda_row || y >= cuda_column) return;
   int index = x*cuda_column + y;
-  data[index].x*=1./sqrtf(cuda_row*cuda_column);
-  data[index].y*=1./sqrtf(cuda_row*cuda_column);
+  data[index].x*=factor;
+  data[index].y*=factor;
 }
 
 __global__ void applyMod(complexFormat* source, complexFormat* target, ImageMask *bs = 0, bool loose=0, int iter = 0){
@@ -186,18 +187,18 @@ __global__ void applyMod(complexFormat* source, complexFormat* target, ImageMask
   source[index].x = ratiox*sourcedata.x;
   source[index].y = ratioy*sourcedata.y;
 }
+__global__ void multiplyPatternPhase_Device(complexFormat* amp, Real r_d_lambda, Real d_r_lambda){ // pixsize*pixsize*M_PI/(d*lambda) and 2*d*M_PI/lambda
+  int x = blockIdx.x * blockDim.x + threadIdx.x;
+  int y = blockIdx.y * blockDim.y + threadIdx.y;
+  Real phase = (pow(x-(cuda_row>>1),2)+pow(y-(cuda_column>>1),2))*r_d_lambda+d_r_lambda;
+  int index = x*cuda_column + y;
+  complexFormat p = {cos(phase),sin(phase)};
+  p = cuCmulf(amp[index], p);
+  amp[index].x = p.x;
+  amp[index].y = p.y;
+}
 
 Mat* createWaveFront(Mat &intensity, Mat &phase, int rows, int columns, Mat* &itptr, Mat* wavefront = 0){
-  if ( !intensity.data )
-  {
-      printf("No intensity data \n");
-      exit(0);
-  }
-  if ( !phase.data )
-  {
-      printf("No phase data \n");
-      exit(0);
-  }
   if(intensity.rows!=phase.rows || intensity.cols!=phase.cols) {
     printf("intensity map and phase map having different dimensions");
     exit(0);
@@ -215,7 +216,7 @@ Mat* createWaveFront(Mat &intensity, Mat &phase, int rows, int columns, Mat* &it
   }
   Mat &phase_sc = *imageptr;
   //wavefront = convertFromIntegerToComplex(intensity_sc, wavefront,0,"waveFront");
-  wavefront = convertFromIntegerToComplex(intensity_sc, phase_sc, wavefront);
+  wavefront = convertFromIntegerToComplex(intensity_sc, *imageptr, wavefront);
   delete imageptr;
   return wavefront;
   //imwrite("input.png",image);
@@ -241,21 +242,31 @@ __device__ void ApplyPOSHIOSupport(bool insideS, complexFormat &rhonp1, complexF
   rhonp1.y -= beta*rhoprime.y;
 }
 struct experimentConfig{
- bool useDM;
- bool useBS;
- bool useShrinkMap = 0;
- bool reconAC = 0;
- ImageMask* spt;
- ImageMask* beamStop;
- bool restart;
- Real lambda = 0.01;
- Real d = 16e3;
- Real pixelsize = 6.5;
- Real beamspotsize = 200;
- Real fresnelPhaseFactor = 0;
+  bool useDM=0;
+  bool useBS=0;
+  bool useShrinkMap = 0;
+  bool reconAC = 0;
+  ImageMask* spt=0;
+  ImageMask* beamStop=0;
+  bool restart=0;
+  Real lambda = 0.01;
+  Real d = 16e3;
+  Real pixelsize = 6.5;
+  Real beamspotsize = 200;
+  Real enhancement = 0;
+  Real forwardFactor = 0;
+  Real fresnelFactor = 0;
+  Real inverseFactor = 0;
+  void propagate(complexFormat* datain, complexFormat* dataout, bool isforward){
+      myCufftExec( *plan, datain, dataout, isforward? CUFFT_FORWARD: CUFFT_INVERSE);
+      applyNorm<<<numBlocks,threadsPerBlock>>>(dataout, isforward? forwardFactor: inverseFactor);
+  }
+  void multiplyPatternPhase(complexFormat* amp){
+    multiplyPatternPhase_Device<<<numBlocks,threadsPerBlock>>>(amp, pixelsize*pixelsize*M_PI/(d*lambda), 2*d*M_PI/lambda);
+  }
 };
 
-__global__ void applySupport(complexFormat *gkp1, complexFormat *gkprime, Real* objMod, ImageMask *spt, Real fresnelPhaseFactor = 0){
+__global__ void applySupport(complexFormat *gkp1, complexFormat *gkprime, Real* objMod, ImageMask *spt, Real fresnelFactor = 0){
 
   int x = blockIdx.x * blockDim.x + threadIdx.x;
   int y = blockIdx.y * blockDim.y + threadIdx.y;
@@ -276,9 +287,9 @@ __global__ void applySupport(complexFormat *gkp1, complexFormat *gkprime, Real* 
   //else ApplyPOSHIOSupport(inside,gkp1data,gkprimedata,beta_HIO);
   //printf("%d, (%f,%f), (%f,%f), %f\n",inside, gkprimedata.x,gkprimedata.y,gkp1data.x,gkp1data.y,cuda_beta_HIO);
   ApplyHIOSupport(inside,gkp1data,gkprimedata,cuda_beta_HIO);
-  if(fresnelPhaseFactor!=0) {
+  if(fresnelFactor*(cuda_row*cuda_row+cuda_column*cuda_column)>1) {
     if(inside){
-      Real phase = fresnelPhaseFactor*(pow(Real(x)/cuda_row-0.5,2)+pow(Real(y)/cuda_column-0.5,2));
+      Real phase = M_PI*fresnelFactor*(pow(x-(cuda_row>>1),2)+pow(y-(cuda_column>>1),2));
       //Real mod = cuCabs(gkp1data);
       Real mod = fabs(gkp1data.x*cos(phase)+gkp1data.y*sin(phase)); //use projection (Error reduction)
       gkp1data.x=mod*cos(phase);
@@ -297,7 +308,7 @@ __global__ void applySupport(complexFormat *gkp1, complexFormat *gkprime, Real* 
   //else ApplySFSupport(inside,gkp1data,gkprimedata);
   //epsilonS+=hypot(tmp[0]-gkp1data[0],tmp[1]-gkp1data[1]);
 }
-void phaseRetrieve( experimentConfig &setups, Mat* targetfft, Mat* gkp1 = 0, Mat *cache = 0, Mat* fftresult = 0 ){
+Mat* phaseRetrieve( experimentConfig &setups, Mat* targetfft, Mat* &gkp1, Mat *cache = 0, Mat* fftresult = 0 ){
     Mat* pmpsg = 0;
     bool useShrinkMap = setups.useShrinkMap;
     int row = targetfft->rows;
@@ -323,7 +334,7 @@ void phaseRetrieve( experimentConfig &setups, Mat* targetfft, Mat* gkp1 = 0, Mat
     fepS.open("epsilonS.txt",ios::out |(setups.restart? ios::app:std::ios_base::openmode(0)));
     int niters = 5000;
     int tot = row*column;
-    bool saveIter=0;
+    bool saveIter=1;
     Mat objMod(row,column,float_cv_format(1));
     Mat* maskKernel;
     Real gaussianSigma = 3;
@@ -342,14 +353,11 @@ void phaseRetrieve( experimentConfig &setups, Mat* targetfft, Mat* gkp1 = 0, Mat
     cudaMemcpy(cuda_targetfft, targetfft->data, sz, cudaMemcpyHostToDevice);
     cudaMemcpy(cuda_fftresult, fftresult->data, sz, cudaMemcpyHostToDevice);
 
-    dim3 numBlocks((row-1)/threadsPerBlock.x+1, (column-1)/threadsPerBlock.y+1);
-    //dim3 numBlocks(row/threadsPerBlock.x, column/threadsPerBlock.y);
     cudaMemcpy(gkp1->data, cuda_targetfft, sz, cudaMemcpyDeviceToHost);
     convertFromComplexToInteger( gkp1,cache, MOD2,1);
     imwrite("pre_recon_intensity.png",*cache);
 
-    myCufftExec( *plan, cuda_targetfft, cuda_gkp1, CUFFT_INVERSE);
-    applyNorm<<<numBlocks,threadsPerBlock>>>(cuda_gkp1);
+    setups.propagate(cuda_targetfft, cuda_gkp1,0);
 
     std::chrono::time_point<std::chrono::high_resolution_clock> now = std::chrono::high_resolution_clock::now();
     std::chrono::duration<int64_t, std::nano> time_applyMod(0);
@@ -383,25 +391,16 @@ void phaseRetrieve( experimentConfig &setups, Mat* targetfft, Mat* gkp1 = 0, Mat
         if(useBS) applyMod<<<numBlocks,threadsPerBlock>>>(cuda_pmpsg,cuda_targetfft,cir.cuda, !setups.reconAC || iter > 1000,iter);  
         else applyMod<<<numBlocks,threadsPerBlock>>>(cuda_pmpsg,cuda_targetfft,0, !setups.reconAC || iter > 1000, iter);
       }
-      //cudaDeviceSynchronize();
       time_applyMod+=std::chrono::high_resolution_clock::now()-now;
       
       epsilonS = epsilonF = 0;
       now = std::chrono::high_resolution_clock::now();
-      myCufftExec( *plan, cuda_fftresult, cuda_gkprime, CUFFT_INVERSE);
+      setups.propagate(cuda_fftresult, cuda_gkprime, 0);
       time_FFT+=std::chrono::high_resolution_clock::now()-now;
-      now = std::chrono::high_resolution_clock::now();
-      applyNorm<<<numBlocks,threadsPerBlock>>>(cuda_gkprime);
-     // cudaDeviceSynchronize();
-      time_norm+=std::chrono::high_resolution_clock::now()-now;
       if(useDM){
         now = std::chrono::high_resolution_clock::now();
-        myCufftExec( *plan, cuda_pmpsg, cuda_pmpsg, CUFFT_INVERSE);
+	setups.propagate(cuda_pmpsg, cuda_pmpsg, 0);
         time_FFT+=std::chrono::high_resolution_clock::now()-now;
-        now = std::chrono::high_resolution_clock::now();
-        applyNorm<<<numBlocks,threadsPerBlock>>>(cuda_pmpsg);
-        //cudaDeviceSynchronize();
-        time_norm+=std::chrono::high_resolution_clock::now()-now;
       }
       bool updateMask = (iter > 1000) && iter%20==0 && useShrinkMap && iter!=0;
       if(updateMask){
@@ -410,7 +409,7 @@ void phaseRetrieve( experimentConfig &setups, Mat* targetfft, Mat* gkp1 = 0, Mat
         maskKernel = gaussianKernel(size,size,gaussianSigma);
       }
       now = std::chrono::high_resolution_clock::now();
-      applySupport<<<numBlocks,threadsPerBlock>>>(cuda_gkp1, cuda_gkprime, cuda_objMod,cuda_spt,iter > 1000?0:setups.fresnelPhaseFactor);
+      applySupport<<<numBlocks,threadsPerBlock>>>(cuda_gkp1, cuda_gkprime, cuda_objMod,cuda_spt,iter>1000?0:setups.fresnelFactor);
       time_support+=std::chrono::high_resolution_clock::now()-now;
 
       //if(iter==1){
@@ -420,7 +419,6 @@ void phaseRetrieve( experimentConfig &setups, Mat* targetfft, Mat* gkp1 = 0, Mat
       //exit(0);
       //}
 
-      //cudaDeviceSynchronize();
       if(updateMask){
         cudaMemcpy(objMod.data, cuda_objMod, sz/2, cudaMemcpyDeviceToHost);
         filter2D(objMod, *re.image,objMod.depth(),*maskKernel);
@@ -446,15 +444,10 @@ void phaseRetrieve( experimentConfig &setups, Mat* targetfft, Mat* gkp1 = 0, Mat
 
       //if(sqrt(epsilonS/row/column)<0.05) break;
       now = std::chrono::high_resolution_clock::now();
-      myCufftExec( *plan, cuda_gkp1, cuda_fftresult, CUFFT_FORWARD);
+      setups.propagate( cuda_gkp1, cuda_fftresult, 1);
       time_FFT+=std::chrono::high_resolution_clock::now()-now;
-      now = std::chrono::high_resolution_clock::now();
-      applyNorm<<<numBlocks,threadsPerBlock>>>(cuda_fftresult);
-      //cudaDeviceSynchronize();
-      time_norm+=std::chrono::high_resolution_clock::now()-now;
       if(useDM){ // FFT to get f field;
-        myCufftExec( *plan, cuda_pmpsg, cuda_pmpsg, CUFFT_FORWARD);
-        applyNorm<<<numBlocks,threadsPerBlock>>>(cuda_pmpsg);
+        setups.propagate(cuda_pmpsg, cuda_pmpsg, 1);
         cudaDeviceSynchronize();
       }
       //end iteration
@@ -473,6 +466,7 @@ void phaseRetrieve( experimentConfig &setups, Mat* targetfft, Mat* gkp1 = 0, Mat
     if(useDM)  imwrite("recon_pmpsg.png",*cache);
     convertFromComplexToInteger( fftresult, cache, MOD2,1);
     imwrite("recon_pattern.png",*cache);
+    return fftresult;
 }
 
 __global__ void applyAutoCorrelationMod(complexFormat* source,complexFormat* target, ImageMask *bs = 0){
@@ -538,10 +532,9 @@ __global__ void applyHIOACSupport(complexFormat* data,complexFormat* prime, sptT
 }
 
 template <typename sptType>
-void autoCorrelationConstrain(Mat* pattern, sptType *spt, Mat* cache, ImageMask *bs = 0){  //beam stop
+void autoCorrelationConstrain(Mat* pattern, sptType *spt, Mat* cache, Real norm, ImageMask *bs = 0){  //beam stop
   Real totalIntensity = 1000;
   cudaMemcpyToSymbol(cuda_totalIntensity,&totalIntensity,sizeof(totalIntensity));
-  dim3 numBlocks((pattern->rows-1)/threadsPerBlock.x+1, (pattern->cols-1)/threadsPerBlock.y+1);
   complexFormat *autocorrelation, *cuda_pattern, *autoprime;
   ImageMask autoCorrelationMask;
   ImageMask *cuda_Mask;
@@ -565,7 +558,7 @@ void autoCorrelationConstrain(Mat* pattern, sptType *spt, Mat* cache, ImageMask 
   convertFromComplexToInteger<Real>(autoCorrelationMask.image, cache,MOD, 1);
   imwrite("autoCorrelationMask.png",*cache);
   myCufftExec(*plan,cuda_pattern,autocorrelation,CUFFT_INVERSE);
-  applyNorm<<<numBlocks,threadsPerBlock>>>(autocorrelation);
+  applyNorm<<<numBlocks,threadsPerBlock>>>(autocorrelation,1./pattern->rows/pattern->cols/norm);
   cudaMemcpy(pattern->data, autocorrelation, sz, cudaMemcpyDeviceToHost);
   convertFromComplexToInteger(pattern, cache, REAL, 1);
   imwrite("initAC.png",*cache);
@@ -582,10 +575,10 @@ void autoCorrelationConstrain(Mat* pattern, sptType *spt, Mat* cache, ImageMask 
     if(iter<4500) applyHIOACSupport<<<numBlocks,threadsPerBlock>>>(autocorrelation, autoprime, cuda_Mask, cuda_objMod);
     else applyERACSupport<<<numBlocks,threadsPerBlock>>>(autocorrelation, autoprime, cuda_Mask, cuda_objMod);
     myCufftExec(*plan,autocorrelation,autoprime,CUFFT_FORWARD);
-    applyNorm<<<numBlocks,threadsPerBlock>>>(autoprime);
+    applyNorm<<<numBlocks,threadsPerBlock>>>(autoprime,norm);
     applyAutoCorrelationMod<<<numBlocks,threadsPerBlock>>>(autoprime, cuda_pattern, bs?bs->cuda:0);
     myCufftExec(*plan,autoprime,autoprime,CUFFT_INVERSE);
-    applyNorm<<<numBlocks,threadsPerBlock>>>(autoprime);
+    applyNorm<<<numBlocks,threadsPerBlock>>>(autoprime,1./pattern->rows/pattern->cols/norm);
     if(updateMask){
       int size = floor(gaussianSigma*6); // r=3 sigma to ensure the contribution is negligible (0.01 of the maximum)
       size = size/2*2+1; //ensure odd
@@ -650,11 +643,12 @@ int main(int argc, char** argv )
     int row, column;
     Mat intensity = readImage( argv[2] , !runSim);
     //maskOperation(intensity,intensity);
-    Mat ele = getStructuringElement(MORPH_RECT,Size(3,3),Point(1,1));
+    //Mat ele = getStructuringElement(MORPH_RECT,Size(3,3),Point(1,1));
     //erode( intensity, intensity, ele);
     //dilate( intensity, intensity, ele);
     row = intensity.rows;
     column = intensity.cols;
+
     pixeltype *rowp;
     if(useRectHERALDO){
       for(int i = 0; i < row ; i++){
@@ -665,14 +659,12 @@ int main(int argc, char** argv )
       }
     }
 
-
     if(runSim){
 	    row*=oversampling;
 	    column*=oversampling;
     }
-    cudaMemcpyToSymbol(cuda_row,&row,sizeof(row));
-    cudaMemcpyToSymbol(cuda_column,&column,sizeof(column));
 
+    //--------------------------some mask shapes-----------------------------------
     C_circle cir,cir2,cir3;
     //cir is the beam stop
     //cir.x0=row/2-50;
@@ -699,16 +691,17 @@ int main(int argc, char** argv )
     re.endx = row-re.startx;
     re.endy = column-re.starty;
     
-    dim3 numBlocks((row-1)/threadsPerBlock.x+1, (column-1)/threadsPerBlock.y+1);
+    //------------------------configure cuda-----------------------------------------
+    cudaMemcpyToSymbol(cuda_row,&row,sizeof(row));
+    cudaMemcpyToSymbol(cuda_column,&column,sizeof(column));
+    numBlocks.x=(row-1)/threadsPerBlock.x+1;
+    numBlocks.y=(column-1)/threadsPerBlock.y+1;
 
-    experimentConfig setups;
-    setups.reconAC = 0;
-    setups.useShrinkMap = 1;
+    //------------------------create shrinking mask----------------------------------
     ImageMask shrinkingMask;
     shrinkingMask.threshold = 0.1;
-    setups.useDM = 0;
 
-    setups.useBS = 1;
+    //------------------------configure beam stop------------------------------------
     ImageMask beamStop;
     beamStop.threshold = 0.5;
     beamStop.init_image(new Mat(row,column,float_cv_format(1)));
@@ -720,22 +713,35 @@ int main(int argc, char** argv )
     cudaFree(cuda_spt);
     beamStop.updateCuda();
 
+    //-----------------------configure experiment setups-----------------------------
+    experimentConfig setups;
+    setups.reconAC = 0;
+    setups.useShrinkMap = 1;
+    setups.useDM = 0;
+    setups.useBS = 1;
     setups.spt = &shrinkingMask;
     //setups.spt = &re;
     //setups.spt = &cir3;
-    
     setups.beamStop = &beamStop;//&cir;
     setups.restart = restart;
     setups.d = oversampling*setups.pixelsize*setups.beamspotsize/setups.lambda; //distance to guarentee oversampling
     //setups.pixelsize = 7;//setups.d/oversampling/setups.beamspotsize*setups.lambda;
-    printf("recommanded imaging distance = %f\n", setups.d);
-    printf("recommanded pixel size = %f\n", setups.pixelsize);
+    setups.enhancement = pow(setups.pixelsize,4)*row*column/pow(setups.lambda*setups.d,2); // this guarentee energy conservation
+    setups.enhancement *= 0.2; //too strong in the middle
+    setups.fresnelFactor = setups.lambda*setups.d/pow(setups.pixelsize,2)/row/column;
+    setups.forwardFactor = setups.fresnelFactor*setups.enhancement;
+    setups.inverseFactor = 1./row/column/setups.forwardFactor;
+    printf("Imaging distance = %f\n", setups.d);
+    printf("Pixel size = %f\n", setups.pixelsize);
+    printf("forward norm = %f\n", setups.forwardFactor);
+    printf("backward norm = %f\n", setups.inverseFactor);
+    printf("fresnel factor = %f\n", setups.fresnelFactor);
+    printf("enhancement = %f\n", setups.enhancement);
 
     bool isFarField = 0;
-    Real fresnelNumber = 1./(setups.d*setups.lambda/pi/pow(setups.beamspotsize,2));
-    printf("Fresnel Number = %f\n",fresnelNumber);
+    Real fresnelNumber = pi*pow(setups.beamspotsize,2)/(setups.d*setups.lambda);
     if(fresnelNumber < 0.01) isFarField = 1;
-    if(isFresnel&&!isFarField) setups.fresnelPhaseFactor = pi*setups.lambda*setups.d/pow(setups.pixelsize,2);
+    printf("Fresnel Number = %f\n",fresnelNumber);
     //these are for simulation
     Mat* cache = 0;
     Mat* cache1;
@@ -743,10 +749,13 @@ int main(int argc, char** argv )
     if(runSim){
       if(argc==4){
         Mat phase = readImage( argv[3]);
-        if(oversampling>1) 
-          gkp1 = createWaveFront(*extend(*cache1,oversampling), *extend(phase,oversampling), row, column,cache,gkp1);
-        //if(oversampling>1) gkp1 = createWaveFront(extend(intensity,oversampling), extend(phase,oversampling), row, column,cache,gkp1);
-        else gkp1 = createWaveFront(intensity,phase, row, column,cache,gkp1);
+        if(oversampling>1) {
+          cache = extend(*cache1,oversampling);
+	  Mat* tmp = extend(phase,oversampling);
+          gkp1 = convertFromIntegerToComplex(*cache, *tmp ,gkp1);
+	  delete tmp;
+	}
+        else gkp1 = convertFromIntegerToComplex(intensity,phase,gkp1);
       }else{
         if(oversampling>1) cache = extend(*cache1,oversampling);
 	else cache = cache1;
@@ -755,7 +764,7 @@ int main(int argc, char** argv )
       if(!isFarField && isFresnel){
         auto f = [&](int x, int y, fftw_format &data){
           auto tmp = (complex<Real>*)&data;
-	  Real phase = setups.fresnelPhaseFactor*(pow(Real(x)/row-0.5,2)+pow(Real(y)/column-0.5,2));
+	  Real phase = M_PI*setups.fresnelFactor*(pow(x-(row>>1),2)+pow(y-(column>>1),2));
 	  *tmp *= exp(complex<Real>(0,phase));
 	};
         imageLoop<decltype(f)>(gkp1,&f,0);
@@ -788,7 +797,7 @@ int main(int argc, char** argv )
       imwrite("init_object.png",*cache);
       convertFromComplexToInteger(gkp1, cache, PHASE,0,1,"Object Phase");
       imwrite("init_object_phase.png",*cache);
-      targetfft = fftw(gkp1,targetfft,1); 
+      targetfft = fftw(gkp1,targetfft,1,setups.forwardFactor); 
     }else{
       //if(mergeDepth == 1) cache = cache1;
       //else 
@@ -802,7 +811,7 @@ int main(int argc, char** argv )
       intensity = readImage(argv[3]);
       Mat phase = readImage(argv[4]);
       gkp1 = createWaveFront(intensity, phase, row, column,cache,gkp1);
-      fftresult = fftw(gkp1,fftresult,1); //If not restart, this line just allocate space, the values are not used.
+      fftresult = fftw(gkp1,fftresult,1,setups.forwardFactor); //If not restart, this line just allocate space, the values are not used.
     }
     //cir2.x0=row/2;
     //cir2.y0=column/2;
@@ -828,7 +837,7 @@ int main(int argc, char** argv )
       if(padAutoCorrelation) datacor/=padAutoCorrelation;
     }
     if(!setups.reconAC || runSim) {
-      autocorrelation = fftw(autocorrelation, autocorrelation, 0);
+      autocorrelation = fftw(autocorrelation, autocorrelation, 0,setups.inverseFactor);
     }
     if(padAutoCorrelation) {
       row*=padAutoCorrelation;
@@ -850,7 +859,7 @@ int main(int argc, char** argv )
     cufftPlan2d ( plan, row, column, FFTformat);
 
     shrinkingMask.init_image(new Mat(row,column,float_cv_format(1)));
-    convertFromComplexToInteger( autocorrelation, cache, REAL,0,1,"HERALDO U core"); 
+    convertFromComplexToInteger( autocorrelation, cache, REAL,1,1,"HERALDO U core"); 
     imwrite("ucore.png",*cache);
     if(!setups.reconAC || runSim) {
       for(int i = 0; i<row*column; i++){ //remove the phase information
@@ -866,8 +875,8 @@ int main(int argc, char** argv )
       shrinkingMask.updateCuda();
     }
     else {
-      autoCorrelationConstrain(autocorrelation, &re, cache, setups.useBS?&beamStop:0);
-      fftw(autocorrelation, targetfft, 1);
+      autoCorrelationConstrain(autocorrelation, &re, cache, setups.forwardFactor, setups.useBS?&beamStop:0);
+      fftw(autocorrelation, targetfft, 1, setups.forwardFactor);
       auto f =  [&](int x, int y, fftw_format &data){
 	data = sqrt(max(data.real(),0.));
       };
@@ -879,7 +888,7 @@ int main(int argc, char** argv )
       shrinkingMask.cpyToGM();
     }
     if(doCentral || padAutoCorrelation){
-      targetfft = fftw(autocorrelation, targetfft, 1);
+      targetfft = fftw(autocorrelation, targetfft, 1, setups.forwardFactor);
     }
     if(1){ //apply random phase
       for(int i = 0; i<row*column; i++){ 
@@ -917,6 +926,9 @@ int main(int argc, char** argv )
     imwrite("auto_correlation.png",*cache);
     //Phase retrieving starts from here. In the following, only targetfft is needed.
     if(doIteration) phaseRetrieve(setups, targetfft, gkp1, cache, fftresult); //fftresult is the starting point of the iteration
+    //Now let's do KCDI
+
+
     return 0;
 }
 
