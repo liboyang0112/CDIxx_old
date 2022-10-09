@@ -578,21 +578,9 @@ int main(int argc, char** argv )
     if(argc < 2){
       printf("please feed the object intensity and phase image\n");
     }
+    auto seed = (unsigned)time(NULL);
     bool runSim;
     bool simCCDbit = 1;
-    printf("command:");
-    for(int i = 0; i < argc ; i++){
-	    printf("%s ",argv[i]);
-    }
-    printf("\n");
-    if(argv[1] == std::string("sim")){
-      runSim = 1;
-    }else{
-      runSim = 0;
-    }
-
-
-    auto seed = (unsigned)time(NULL);
     bool isFresnel = 1;
     bool doIteration = 1;
     bool useGaussionLumination = 0;
@@ -600,15 +588,34 @@ int main(int argc, char** argv )
     bool doCentral =0;
     bool useRectHERALDO = 0;
     bool doKCDI = 1;
+    bool restart = 0;
+    Real oversampling = 3;
+    printf("command:");
+
+    for(int i = 0; i < argc ; i++){
+	    printf("%s ",argv[i]);
+    }
+    printf("\n");
+
+    if(std::string(argv[1]).find("sim") == std::string::npos){
+      runSim = 0;
+    }else{
+      runSim = 1;
+    }
+
+    if(std::string(argv[1]).find("KCDI") == std::string::npos){
+      doKCDI = 0;
+    }else{
+      doKCDI = 1;
+    }
+
 
     srand(seed);
     printf("seed:%d\n",seed);
-    Real oversampling = 3;
     Real padAutoCorrelation = 0;
     Mat* gkp1 = 0;
     Mat* targetfft = 0;
     Mat* fftresult = 0;
-    bool restart = 0;
     if(argc > 4){
       restart = 1;
       
@@ -698,9 +705,11 @@ int main(int argc, char** argv )
     setups.beamStop = &beamStop;//&cir;
     setups.restart = restart;
     setups.d = oversampling*setups.pixelsize*setups.beamspotsize/setups.lambda; //distance to guarentee oversampling
-    //setupsKCDI.d = 
+    Real k = pow(setups.pixelsize,2)*row/setups.lambda/setups.d; //calculate the proper distance for KCDI
+    setupsKCDI.d = k*setups.d/(k-1);
     //setups.pixelsize = 7;//setups.d/oversampling/setups.beamspotsize*setups.lambda;
     setups.init(row,column);
+    setupsKCDI.init(row,column);
     printf("Imaging distance = %f\n", setups.d);
     printf("Pixel size = %f\n", setups.pixelsize);
     printf("forward norm = %f\n", setups.forwardFactor);
@@ -715,6 +724,7 @@ int main(int argc, char** argv )
     //these are for simulation
     Mat* cache = 0;
     Mat* cache1;
+
     cache1 = &intensity;
     if(runSim){
       if(argc==4){
@@ -780,7 +790,7 @@ int main(int argc, char** argv )
     if(restart){
       intensity = readImage(argv[3]);
       Mat phase = readImage(argv[4]);
-      gkp1 = createWaveFront(intensity, phase, row, column,cache,gkp1);
+      gkp1 = convertFromIntegerToComplex(intensity, phase,gkp1);
       fftresult = fftw(gkp1,fftresult,1,setups.forwardFactor); //If not restart, this line just allocate space, the values are not used.
     }
     //cir2.x0=row/2;
