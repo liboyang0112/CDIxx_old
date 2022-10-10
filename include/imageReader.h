@@ -1,3 +1,3 @@
 #include <common.h>
 
-Mat readImage(char* name, bool isFrequency = 0, Mat **mask = 0);
+Mat readImage(const char* name, bool isFrequency = 0, Mat **mask = 0);

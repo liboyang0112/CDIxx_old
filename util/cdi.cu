@@ -18,6 +18,7 @@
 #include "imageReader.h"
 #include <ctime>
 #include "cudaConfig.h"
+#include "readConfig.h"
 
 #define gpuErrchk(ans) { gpuAssert((ans), __FILE__, __LINE__); }
 inline void gpuAssert(cudaError_t code, const char *file, int line, bool abort=true)
@@ -206,22 +207,18 @@ __device__ void ApplyPOSHIOSupport(bool insideS, complexFormat &rhonp1, complexF
   }
   rhonp1.y -= beta*rhoprime.y;
 }
-struct experimentConfig{
-  bool useDM=0;
-  bool useBS=0;
-  bool useShrinkMap = 0;
-  bool reconAC = 0;
-  ImageMask* spt=0;
-  ImageMask* beamStop=0;
-  bool restart=0;
-  Real lambda = 0.01;
-  Real d = 16e3;
-  Real pixelsize = 26;
-  Real beamspotsize = 200;
+
+class experimentConfig : public readConfig{
+public:
+//calculated later by init function, image size dependant
+  experimentConfig(const char* configfile):readConfig(configfile){}
   Real enhancement = 0;
   Real forwardFactor = 0;
   Real fresnelFactor = 0;
   Real inverseFactor = 0;
+  ImageMask* spt=0;
+  ImageMask* beamStop=0;
+
   void propagate(complexFormat* datain, complexFormat* dataout, bool isforward){
       myCufftExec( *plan, datain, dataout, isforward? CUFFT_FORWARD: CUFFT_INVERSE);
       applyNorm<<<numBlocks,threadsPerBlock>>>(dataout, isforward? forwardFactor: inverseFactor);
@@ -231,7 +228,7 @@ struct experimentConfig{
   }
   void init(int row, int column){
     enhancement = pow(pixelsize,4)*row*column/pow(lambda*d,2); // this guarentee energy conservation
-    enhancement *= 0.2; //too strong in the middle
+    enhancement *= exposure; //too strong in the middle
     fresnelFactor = lambda*d/pow(pixelsize,2)/row/column;
     forwardFactor = fresnelFactor*enhancement;
     inverseFactor = 1./row/column/forwardFactor;
@@ -306,7 +303,6 @@ Mat* phaseRetrieve( experimentConfig &setups, Mat* targetfft, Mat* &gkp1, Mat *c
     fepS.open("epsilonS.txt",ios::out |(setups.restart? ios::app:std::ios_base::openmode(0)));
     int niters = 5000;
     int tot = row*column;
-    bool saveIter=1;
     Mat objMod(row,column,float_cv_format(1));
     Mat* maskKernel;
     Real gaussianSigma = 3;
@@ -347,7 +343,7 @@ Mat* phaseRetrieve( experimentConfig &setups, Mat* targetfft, Mat* &gkp1, Mat *c
 	  time_support.count(), ((Real)time_support.count())/tot*100,
 	  time_applyMod.count(),((Real)time_applyMod.count())/tot*100
         );
-	if(saveIter){
+	if(setups.saveIter){
           cudaMemcpy(gkp1->data, cuda_gkp1, sz, cudaMemcpyDeviceToHost);
           convertFromComplexToInteger( gkp1,cache, MOD2,0);
           std::string iterstr = to_string(iter);
@@ -398,7 +394,7 @@ Mat* phaseRetrieve( experimentConfig &setups, Mat* targetfft, Mat* &gkp1, Mat *c
 	if(gaussianSigma>1.5) gaussianSigma*=0.99;
 	delete maskKernel;
       }
-      if(updateMask&&iter%100==0&&saveIter){
+      if(updateMask&&iter%100==0&&setups.saveIter){
 	convertFromComplexToInteger<Real>(re.image, cache,MOD,0);
         std::string iterstr = to_string(iter);
 	imwrite("mask"+iterstr+".png",*cache);
@@ -574,22 +570,11 @@ void autoCorrelationConstrain(Mat* pattern, sptType *spt, Mat* cache, Real norm,
 
 int main(int argc, char** argv )
 {
-
+    experimentConfig setups(argv[1]);
     if(argc < 2){
       printf("please feed the object intensity and phase image\n");
     }
     auto seed = (unsigned)time(NULL);
-    bool runSim;
-    bool simCCDbit = 1;
-    bool isFresnel = 1;
-    bool doIteration = 1;
-    bool useGaussionLumination = 0;
-    bool useGaussionHERALDO = 0;
-    bool doCentral =0;
-    bool useRectHERALDO = 0;
-    bool doKCDI = 1;
-    bool restart = 0;
-    Real oversampling = 3;
     printf("command:");
 
     for(int i = 0; i < argc ; i++){
@@ -597,31 +582,15 @@ int main(int argc, char** argv )
     }
     printf("\n");
 
-    if(std::string(argv[1]).find("sim") == std::string::npos){
-      runSim = 0;
-    }else{
-      runSim = 1;
-    }
-
-    if(std::string(argv[1]).find("KCDI") == std::string::npos){
-      doKCDI = 0;
-    }else{
-      doKCDI = 1;
-    }
-
-
     srand(seed);
     printf("seed:%d\n",seed);
     Real padAutoCorrelation = 0;
     Mat* gkp1 = 0;
     Mat* targetfft = 0;
     Mat* fftresult = 0;
-    if(argc > 4){
-      restart = 1;
-      
-    }
     int row, column;
-    Mat intensity = readImage( argv[2] , !runSim);
+    setups.print();
+    Mat intensity = readImage( setups.runSim?setups.common.Intensity.c_str():setups.common.Pattern.c_str() , !setups.runSim);
     //Mat ele = getStructuringElement(MORPH_RECT,Size(3,3),Point(1,1));
     //filter2D(intensity, intensity, intensity.depth(), ele);
     //erode( intensity, intensity, ele);
@@ -630,7 +599,7 @@ int main(int argc, char** argv )
     column = intensity.cols;
 
     pixeltype *rowp;
-    if(useRectHERALDO){
+    if(setups.useRectHERALDO){
       for(int i = 0; i < row ; i++){
         rowp = intensity.ptr<pixeltype>(i);
         for(int j = 0; j < column ; j++){
@@ -639,9 +608,9 @@ int main(int argc, char** argv )
       }
     }
 
-    if(runSim){
-	    row*=oversampling;
-	    column*=oversampling;
+    if(setups.runSim){
+	    row*=setups.oversampling;
+	    column*=setups.oversampling;
     }
 
     //--------------------------some mask shapes-----------------------------------
@@ -664,8 +633,8 @@ int main(int argc, char** argv )
     //cir3.r = 300/mergeDepth;
     cir3.r = 40;
     rect re;
-    re.startx = (oversampling-1)/2*row/oversampling-1;
-    re.starty = (oversampling-1)/2*column/oversampling-1;
+    re.startx = (setups.oversampling-1)/2*row/setups.oversampling-1;
+    re.starty = (setups.oversampling-1)/2*column/setups.oversampling-1;
     //re.startx = 1./4*row;
     //re.starty = 1./4*column;
     re.endx = row-re.startx;
@@ -694,22 +663,16 @@ int main(int argc, char** argv )
     beamStop.updateCuda();
 
     //-----------------------configure experiment setups-----------------------------
-    experimentConfig setups, setupsKCDI;
-    setups.reconAC = 0;
-    setups.useShrinkMap = 1;
-    setups.useDM = 0;
-    setups.useBS = 1;
     setups.spt = &shrinkingMask;
     //setups.spt = &re;
     //setups.spt = &cir3;
     setups.beamStop = &beamStop;//&cir;
-    setups.restart = restart;
-    setups.d = oversampling*setups.pixelsize*setups.beamspotsize/setups.lambda; //distance to guarentee oversampling
+    setups.d = setups.oversampling*setups.pixelsize*setups.beamspotsize/setups.lambda; //distance to guarentee setups.oversampling
     Real k = pow(setups.pixelsize,2)*row/setups.lambda/setups.d; //calculate the proper distance for KCDI
-    setupsKCDI.d = k*setups.d/(k-1);
-    //setups.pixelsize = 7;//setups.d/oversampling/setups.beamspotsize*setups.lambda;
+    //setupsKCDI.d = k*setups.d/(k-1);
+    //setups.pixelsize = 7;//setups.d/setups.oversampling/setups.beamspotsize*setups.lambda;
     setups.init(row,column);
-    setupsKCDI.init(row,column);
+    //setupsKCDI.init(row,column);
     printf("Imaging distance = %f\n", setups.d);
     printf("Pixel size = %f\n", setups.pixelsize);
     printf("forward norm = %f\n", setups.forwardFactor);
@@ -726,22 +689,22 @@ int main(int argc, char** argv )
     Mat* cache1;
 
     cache1 = &intensity;
-    if(runSim){
-      if(argc==4){
-        Mat phase = readImage( argv[3]);
-        if(oversampling>1) {
-          cache = extend(*cache1,oversampling);
-	  Mat* tmp = extend(phase,oversampling);
+    if(setups.runSim){
+      if(setups.phaseModulation){
+        Mat phase = readImage(setups.common.Phase.c_str());
+        if(setups.oversampling>1) {
+          cache = extend(*cache1,setups.oversampling);
+	  Mat* tmp = extend(phase,setups.oversampling);
           gkp1 = convertFromIntegerToComplex(*cache, *tmp ,gkp1);
 	  delete tmp;
 	}
         else gkp1 = convertFromIntegerToComplex(intensity,phase,gkp1);
       }else{
-        if(oversampling>1) cache = extend(*cache1,oversampling);
+        if(setups.oversampling>1) cache = extend(*cache1,setups.oversampling);
 	else cache = cache1;
 	gkp1 = convertFromIntegerToComplex(*cache, gkp1,0,"waveFront");
       }
-      if(!isFarField && isFresnel){
+      if(!isFarField && setups.isFresnel){
         auto f = [&](int x, int y, fftw_format &data){
           auto tmp = (complex<Real>*)&data;
 	  Real phase = M_PI*setups.fresnelFactor*(pow(x-(row>>1),2)+pow(y-(column>>1),2));
@@ -749,7 +712,7 @@ int main(int argc, char** argv )
 	};
         imageLoop<decltype(f)>(gkp1,&f,0);
       }
-      if(useGaussionLumination){
+      if(setups.useGaussionLumination){
         //setups.spt = &re;
         //if(!setups.useShrinkMap) setups.spt = &cir3;
         //diffraction image, either from simulation or from experiments.
@@ -762,7 +725,7 @@ int main(int argc, char** argv )
 	};
         imageLoop<decltype(f)>(gkp1,&f,0);
       }
-      if(useGaussionHERALDO){
+      if(setups.useGaussionHERALDO){
         auto f = [&](int x, int y, fftw_format &data){
           auto tmp = (complex<Real>*)&data;
 	  if(cir2.isInside(x,y)) 
@@ -787,16 +750,14 @@ int main(int argc, char** argv )
       else
         targetfft = convertFromIntegerToComplex(*cache1,targetfft,1); 
     }
-    if(restart){
-      intensity = readImage(argv[3]);
-      Mat phase = readImage(argv[4]);
-      gkp1 = convertFromIntegerToComplex(intensity, phase,gkp1);
-      fftresult = fftw(gkp1,fftresult,1,setups.forwardFactor); //If not restart, this line just allocate space, the values are not used.
+    if(setups.restart){
+      gkp1 = new Mat(readImage(setups.common.restart.c_str()));
+      fftresult = fftw(gkp1,fftresult,1,setups.forwardFactor); //If not setups.restart, this line just allocate space, the values are not used.
     }
     //cir2.x0=row/2;
     //cir2.y0=column/2;
     Real decay = scale;
-    if(runSim) decay=1;
+    if(setups.runSim) decay=1;
     std::default_random_engine generator;
     Real noiseLevel = 0;
     std::poisson_distribution<int> distribution(noiseLevel);
@@ -806,7 +767,7 @@ int main(int argc, char** argv )
       complex<Real> &data = ((complex<Real>*)(targetfft->data))[i];
       fftw_format &datacor = ((fftw_format*)autocorrelation->data)[i];
       Real mod = abs(data)*sqrt(decay);
-      if(runSim&&simCCDbit) {
+      if(setups.runSim&&setups.simCCDbit) {
         int range= pow(2,16);
         mod = sqrt(((Real)floor(pow(mod,2)*range))/(range)); //assuming we use 16bit CCD
         mod = sqrt(max(0.,pow(mod,2)+Real(distribution(generator)-noiseLevel)/range)); //Poisson noise
@@ -816,7 +777,7 @@ int main(int argc, char** argv )
       datacor = fftw_format(pow(mod,2),0); //ucore is the diffraction pattern
       if(padAutoCorrelation) datacor/=padAutoCorrelation;
     }
-    if(!setups.reconAC || runSim) {
+    if(!setups.reconAC || setups.runSim) {
       autocorrelation = fftw(autocorrelation, autocorrelation, 0,setups.inverseFactor);
     }
     if(padAutoCorrelation) {
@@ -841,7 +802,7 @@ int main(int argc, char** argv )
     shrinkingMask.init_image(new Mat(row,column,float_cv_format(1)));
     convertFromComplexToInteger( autocorrelation, cache, REAL,1,1,"HERALDO U core"); 
     imwrite("ucore.png",*cache);
-    if(!setups.reconAC || runSim) {
+    if(!setups.reconAC || setups.runSim) {
       for(int i = 0; i<row*column; i++){ //remove the phase information
         complex<Real> &datacor = ((complex<Real>*)autocorrelation->data)[i];
 	datacor = abs(datacor);
@@ -867,13 +828,13 @@ int main(int argc, char** argv )
       imageLoop<decltype(f1),Real,fftw_format>(shrinkingMask.image,autocorrelation,&f1,1);
       shrinkingMask.cpyToGM();
     }
-    if(doCentral || padAutoCorrelation){
+    if(setups.doCentral || padAutoCorrelation){
       targetfft = fftw(autocorrelation, targetfft, 1, setups.forwardFactor);
     }
     if(1){ //apply random phase
       for(int i = 0; i<row*column; i++){ 
         complex<Real> &data = ((fftw_format*)targetfft->data)[i];
-        Real mod = (doCentral||padAutoCorrelation)? sqrt(abs(data)) : abs(data);
+        Real mod = (setups.doCentral||padAutoCorrelation)? sqrt(abs(data)) : abs(data);
         if(setups.useBS && ((Real*)beamStop.image->data)[i]>0.5) {
           data = 0.;
         }
@@ -891,7 +852,7 @@ int main(int argc, char** argv )
     //  *tmp = 1.4+*tmp;
     //};
     //imageLoop<decltype(f)>(autocorrelation,&f,0);
-    if(!restart){
+    if(!setups.restart){
       fftresult = new Mat();
       targetfft->copyTo(*fftresult);
     }
@@ -901,11 +862,11 @@ int main(int argc, char** argv )
     imwrite("init_pattern.png",*cache);
     convertFromComplexToInteger(targetfft, cache, MOD2,1,1,"Pattern MOD2",1);
     imwrite("init_logpattern.png",*cache);
-    //if(runSim) targetfft = convertFromIntegerToComplex(*cache, targetfft, 1 , "waveFront");
+    //if(setups.runSim) targetfft = convertFromIntegerToComplex(*cache, targetfft, 1 , "waveFront");
     convertFromComplexToInteger(autocorrelation, cache, REAL,1,1,"Autocorrelation MOD2",1);
     imwrite("auto_correlation.png",*cache);
     //Phase retrieving starts from here. In the following, only targetfft is needed.
-    if(doIteration) phaseRetrieve(setups, targetfft, gkp1, cache, fftresult); //fftresult is the starting point of the iteration
+    if(setups.doIteration) phaseRetrieve(setups, targetfft, gkp1, cache, fftresult); //fftresult is the starting point of the iteration
     //Now let's do KCDI
 
 

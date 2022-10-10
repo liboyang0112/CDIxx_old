@@ -33,7 +33,7 @@ CUDA_WRAP_LIB_SRC=$(wildcard src/gpu/*.cu)
 CUDA_WRAP_LIB_OBJ=$(patsubst src/gpu/%.cu, ${LOCAL_OBJ}/%_cu.o, ${CUDA_WRAP_LIB_SRC})
 CUDA_WRAP_LIB=$(patsubst src/gpu/%.cu, ${LOCAL_LIB}/lib%_cu.a,  ${CUDA_WRAP_LIB_SRC})
 
-LINK_FLAGS_EXT=$(shell pkg-config --libs opencv4 hdf5 tbb fftw3) -lfftw3_mpi -lcholmod -lfftw3_threads -lm -lpthread
+LINK_FLAGS_EXT=$(shell pkg-config --libs opencv4 hdf5 tbb fftw3) -lfftw3_mpi -lcholmod -lfftw3_threads -lm -lpthread -lconfig++
 LINK_FLAGS_EXT_CU=$(shell pkg-config --libs opencv4 hdf5)
 #LINK_FLAGS+=$(patsubst ${LOCAL_LIB}/lib%.so, -l%, ${CPP_LIB})
 LINK_FLAGS_CUDA_WRAP=$(patsubst ${LOCAL_LIB}/lib%.a, -l%, ${CUDA_WRAP_LIB})

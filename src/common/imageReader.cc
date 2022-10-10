@@ -43,7 +43,7 @@ Mat read16bitImage(Mat imagein, int nbitsimg)
     return image;
 }
 
-Mat readImage(char* name, bool isFrequency, Mat **mask){
+Mat readImage(const char* name, bool isFrequency, Mat **mask){
   if(string(name).find(".cxi")!=string::npos){
     printf("Input is recognized as cxi file\n");
     Mat imagein = readCXI(name, mask);  //32FC2, max 65535
