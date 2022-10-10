@@ -6,7 +6,7 @@
 #define RANK         2
 #define RANK_OUT     2
 
-Mat readCXI (const char* filename, Mat **mask = 0)
+Mat readCXI (const char* filename, Mat **mask)
 {
     int noiseLevel = 550;
     hid_t       file, dataset, entry, imagehd, maskhd;         /* handles */

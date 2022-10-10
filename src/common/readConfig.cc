@@ -49,9 +49,9 @@ readConfig::readConfig(const char* configfile){
   // Output a list of all vdWFluids in the inventory.
   try
   {
-    libconfig::Setting InputImages = root["InputImages"];
-    libconfig::Setting defaultImages= InputImages["default"];
-    libconfig::Setting KCDIImages= InputImages["KCDI"];
+    libconfig::Setting &InputImages = root["InputImages"];
+    libconfig::Setting &defaultImages= InputImages["default"];
+    libconfig::Setting &KCDIImages= InputImages["KCDI"];
 
     defaultImages.lookupValue("Intensity",common.Intensity);
     defaultImages.lookupValue("Phase",common.Phase);
@@ -70,7 +70,7 @@ readConfig::readConfig(const char* configfile){
   // Output a list of all vdWFluids in the inventory.
   try
   {
-    libconfig::Setting Job = root["Job"];
+    libconfig::Setting &Job = root["Job"];
     Job.lookupValue("oversampling",oversampling);
     Job.lookupValue("saveIter",saveIter);
     Job.lookupValue("exposure",exposure);
