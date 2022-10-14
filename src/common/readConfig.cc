@@ -78,6 +78,7 @@ readConfig::readConfig(const char* configfile){
     Job.lookupValue("d",d);
     Job.lookupValue("pixelsize",pixelsize);
     Job.lookupValue("beamspotsize",beamspotsize);
+    Job.lookupValue("beamStopSize",beamStopSize);
     Job.lookupValue("runSim",runSim);
     Job.lookupValue("simCCDbit",simCCDbit);
     Job.lookupValue("isFresnel",isFresnel);

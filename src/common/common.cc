@@ -323,10 +323,10 @@ Mat* multiWLGenAVG_AC_FFT(Mat* original, Mat* output, Real m, Real step, Real *s
         auto f = [&](int x, int y, complex<Real> &data){ data = pow(abs(data),2); };
         imageLoop<decltype(f), complex<Real>>(mergedf, &f);
 	Mat *autocorrelation = fftw(mergedf,0,0);
-	Mat *mergedt = new Mat(original->rows, original->cols, float_cv_format(2), Scalar(0));
+	//Mat *mergedt = new Mat(original->rows, original->cols, float_cv_format(2), Scalar(0));
 	//mergedt->ptr<fftw_format>(299-160)[299-160] = 1;
-	mergedt->ptr<fftw_format>(160)[160] = 1;
-	//Mat *mergedt = convertFO<complex<Real>>(autocorrelation);
+	//mergedt->ptr<fftw_format>(160)[160] = 1;
+	Mat *mergedt = convertFO<complex<Real>>(autocorrelation);
 	delete autocorrelation;
 	double r = 1.37;
 	autocorrelation = extend(*mergedt,r);

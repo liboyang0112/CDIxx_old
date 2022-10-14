@@ -29,15 +29,15 @@ class readConfig
 {
 public:
 //bool configs
-  bool runSim;
-  bool simCCDbit = 1;
-  bool isFresnel = 1;
-  bool doIteration = 1;
+  bool runSim = 0;
+  bool simCCDbit = 0;
+  bool isFresnel = 0;
+  bool doIteration = 0;
   bool useGaussionLumination = 0;
   bool useGaussionHERALDO = 0;
   bool doCentral =0;
   bool useRectHERALDO = 0;
-  bool doKCDI = 1;
+  bool doKCDI = 0;
   bool useDM=0;
   bool useBS=0;
   bool useShrinkMap = 0;
@@ -45,6 +45,8 @@ public:
   bool phaseModulation = 0;
   bool restart=0;
   bool saveIter=0;
+//integer configs
+  int beamStopSize = 10;
 //float configs
   Real exposure = 0.1;
   Real oversampling = 3;

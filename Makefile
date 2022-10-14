@@ -63,8 +63,8 @@ ${LOCAL_BIN}/%_run: ${LOCAL_OBJ}/%.o ${COMMON_LIB} ${CUDA_WRAP_LIB}
 ${LOCAL_BIN}/%_cu: ${LOCAL_OBJ}/%_cu.o ${COMMON_LIB} ${CUDA_WRAP_LIB}
 	${CXX} $< -o $@ ${LINK_FLAGS_EXT_CU} ${LINK_FLAGS} -L${CUDA_LIB} -lcufft -lcudart
 
-${LOCAL_LIB}/lib%.so: ${LOCAL_OBJ}/%.o
-	${CXX} -shared $< -o $@ ${LINK_FLAGS_EXT}
+${LOCAL_LIB}/lib%.so: ${LOCAL_OBJ}/%.o ${LOCAL_LIB}/libreadCXI.so
+	${CXX} -shared $< -o $@ ${LINK_FLAGS_EXT} -L${LOCAL_LIB} -lreadCXI
 
 ${LOCAL_LIB}/libreadCXI.so: ${LOCAL_OBJ}/readCXI.o
 	${MPICXX} -shared $< -o $@ ${LINK_FLAGS_EXT}
