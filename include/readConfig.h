@@ -47,6 +47,8 @@ public:
   bool saveIter=0;
 //integer configs
   int beamStopSize = 10;
+  int nIter = 2000;
+  int nIterKCDI = 2000;
 //float configs
   Real exposure = 0.1;
   Real oversampling = 3;

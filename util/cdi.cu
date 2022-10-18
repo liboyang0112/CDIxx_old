@@ -132,6 +132,91 @@ Mat* gaussianKernel(int rows, int cols, Real sigma){
   
   return image;
 }
+
+template <typename T>
+__global__ void cudaConvertFO(T* data){
+  int x = blockIdx.x * blockDim.x + threadIdx.x;
+  int y = blockIdx.y * blockDim.y + threadIdx.y;
+  if(x >= (cuda_row>>1) || y >= cuda_column) return;
+  int index = x*cuda_column + y;
+  int indexp = (x+(cuda_row>>1))*cuda_column + (y >= (cuda_column>>1)? y-(cuda_column>>1): (y+(cuda_column>>1)));
+  T tmp = data[index];
+  data[index]=data[indexp];
+  data[indexp]=tmp;
+}
+
+__global__ void applyNormConvertFO(complexFormat* data, Real factor){
+  int x = blockIdx.x * blockDim.x + threadIdx.x;
+  int y = blockIdx.y * blockDim.y + threadIdx.y;
+  if(x >= (cuda_row>>1) || y >= cuda_column) return;
+  int index = x*cuda_column + y;
+  int indexp = (x+(cuda_row>>1))*cuda_column + (y >= (cuda_column>>1)? y-(cuda_column>>1): (y+(cuda_column>>1)));
+  complexFormat tmp = data[index];
+  data[index].x=data[indexp].x*factor;
+  data[index].y=data[indexp].y*factor;
+  data[indexp].x=tmp.x*factor;
+  data[indexp].y=tmp.y*factor;
+}
+
+__global__  void initESW(complexFormat* ESW, Real* mod, complexFormat* amp){
+  int x = blockIdx.x * blockDim.x + threadIdx.x;
+  int y = blockIdx.y * blockDim.y + threadIdx.y;
+  if(x >= cuda_row || y >= cuda_column) return;
+  int index = x*cuda_column + y;
+  auto tmp = amp[index];
+  if(cuCabsf(tmp)<=1e-10) {
+	  ESW[index] = tmp;
+	  return;
+  }
+  Real factor = mod[index]/cuCabsf(tmp)-1;
+  ESW[index].x = factor*tmp.x;
+  ESW[index].y = factor*tmp.y;
+}
+__global__  void applyESWMod(complexFormat* ESW, Real* mod, complexFormat* amp){
+  int x = blockIdx.x * blockDim.x + threadIdx.x;
+  int y = blockIdx.y * blockDim.y + threadIdx.y;
+  if(x >= cuda_row || y >= cuda_column) return;
+  int index = x*cuda_column + y;
+  auto tmp = amp[index];
+  auto sum = cuCaddf(ESW[index],tmp);
+  Real factor = 0;
+  if(cuCabsf(sum)!=0)
+	  factor = mod[index]/cuCabsf(sum);
+
+  ESW[index].x = factor*sum.x-tmp.x;
+  ESW[index].y = factor*sum.y-tmp.y;
+}
+
+__global__  void applyESWSupport(complexFormat* ESW, complexFormat* ISW, complexFormat* ESWP){
+  int x = blockIdx.x * blockDim.x + threadIdx.x;
+  int y = blockIdx.y * blockDim.y + threadIdx.y;
+  if(x >= cuda_row || y >= cuda_column) return;
+  int index = x*cuda_column + y;
+  auto tmp = ISW[index];
+  auto sum = cuCaddf(tmp,ESWP[index]);
+  if(cuCabsf(tmp) > cuCabsf(sum)) {
+    ESW[index].x = ESWP[index].x;
+    ESW[index].y = ESWP[index].y;
+    return;
+  }
+  if(cuCabsf(tmp)<=1e-4){
+    ESW[index].x -= cuda_beta_HIO*ESWP[index].x;
+    ESW[index].y -= cuda_beta_HIO*ESWP[index].y;
+  }else{
+    Real factor = cuCabsf(tmp)/cuCabsf(sum);
+    ESW[index].x = factor*sum.x-tmp.x;
+    ESW[index].y = factor*sum.y-tmp.y;
+  }
+}
+
+__global__  void getMod(Real* mod, complexFormat* amp){
+  int x = blockIdx.x * blockDim.x + threadIdx.x;
+  int y = blockIdx.y * blockDim.y + threadIdx.y;
+  if(x >= cuda_row || y >= cuda_column) return;
+  int index = x*cuda_column + y;
+  mod[index] = cuCabsf(amp[index]);
+}
+
 __global__ void applyNorm(complexFormat* data, double factor){
   int x = blockIdx.x * blockDim.x + threadIdx.x;
   int y = blockIdx.y * blockDim.y + threadIdx.y;
@@ -168,11 +253,18 @@ __global__ void calcO(complexFormat* ESW, complexFormat* ISW){
   int y = blockIdx.y * blockDim.y + threadIdx.y;
   if(x >= cuda_row || y >= cuda_column) return;
   int index = x*cuda_column + y;
+  if(cuCabsf(ISW[index])<0.3) {
+    ESW[index].x = ESW[index].y = 0;
+    return;
+  }
   complexFormat tmp = cuCdivf(ESW[index],ISW[index]);
+  /*
   Real ttmp = tmp.y;
   tmp.y=tmp.x;   
   tmp.x=1-ttmp;
-  ESW[index]=tmp;
+  */
+  ESW[index].x=tmp.x+1;
+  ESW[index].y=tmp.y;
 }
 
 __global__ void applyMod(complexFormat* source, complexFormat* target, ImageMask *bs = 0, bool loose=0, int iter = 0){
@@ -214,6 +306,7 @@ __global__ void applyMod(complexFormat* source, complexFormat* target, ImageMask
 __global__ void multiplyPatternPhase_Device(complexFormat* amp, Real r_d_lambda, Real d_r_lambda){ // pixsize*pixsize*M_PI/(d*lambda) and 2*d*M_PI/lambda
   int x = blockIdx.x * blockDim.x + threadIdx.x;
   int y = blockIdx.y * blockDim.y + threadIdx.y;
+  if(x >= cuda_row || y >= cuda_column) return;
   Real phase = (pow(x-(cuda_row>>1),2)+pow(y-(cuda_column>>1),2))*r_d_lambda+d_r_lambda;
   int index = x*cuda_column + y;
   complexFormat p = {cos(phase),sin(phase)};
@@ -223,6 +316,7 @@ __global__ void multiplyPatternPhase_Device(complexFormat* amp, Real r_d_lambda,
 __global__ void multiplyFresnelPhase_Device(complexFormat* amp, Real phaseFactor){ // pixsize*pixsize*M_PI/(d*lambda) and 2*d*M_PI/lambda
   int x = blockIdx.x * blockDim.x + threadIdx.x;
   int y = blockIdx.y * blockDim.y + threadIdx.y;
+  if(x >= cuda_row || y >= cuda_column) return;
   int index = x*cuda_column + y;
   Real phase = phaseFactor*(pow(x-(cuda_row>>1),2)+pow(y-(cuda_column>>1),2));
   complexFormat p = {cos(phase),sin(phase)};
@@ -544,18 +638,6 @@ Mat* phaseRetrieve( experimentConfig &setups, Mat* targetfft, Mat* &gkp1, Mat *c
     convertFromComplexToInteger( fftresult, cache, MOD2,1);
     imwrite("recon_pattern.png",*cache);
     return fftresult;
-}
-
-template <typename T>
-__global__ void cudaConvertFO(T* data){
-  int x = blockIdx.x * blockDim.x + threadIdx.x;
-  int y = blockIdx.y * blockDim.y + threadIdx.y;
-  if(x >= (cuda_row>>1) || y >= cuda_column) return;
-  int index = x*cuda_column + y;
-  int indexp = (x+(cuda_row>>1))*cuda_column + (y >= cuda_column>>1? y-(cuda_column>>1): (y+(cuda_column>>1)));
-  T tmp = data[index];
-  data[index]=data[indexp];
-  data[indexp]=tmp;
 }
 
 
@@ -883,8 +965,10 @@ int main(int argc, char** argv )
         targetfft = convertFromIntegerToComplex(*cache1,targetfft,1); 
     }
     if(setups.restart){
-      gkp1 = new Mat(readImage(setups.common.restart.c_str()));
-      fftresult = fftw(gkp1,fftresult,1,setups.forwardFactor); //If not setups.restart, this line just allocate space, the values are not used.
+      FileStorage fs(setups.common.restart.c_str(),FileStorage::READ);
+      fftresult = new Mat();
+      fs["data"]>>(*fftresult);
+      fs.release();
     }
     //cir2.x0=row/2;
     //cir2.y0=column/2;
@@ -998,69 +1082,152 @@ int main(int argc, char** argv )
     convertFromComplexToInteger(autocorrelation, cache, REAL,1,1,"Autocorrelation MOD2",1);
     imwrite("auto_correlation.png",*cache);
     //Phase retrieving starts from here. In the following, only targetfft is needed.
-    if(setups.doIteration) phaseRetrieve(setups, targetfft, gkp1, cache, fftresult); //fftresult is the starting point of the iteration
-    //Now let's do KCDI
-    if(setups.doKCDI){
-      int sz = setups.row*setups.column*sizeof(complexFormat);
-      if(setups.runSim){
-        complexFormat* cuda_KCDIsource, *cuda_ESW, *cuda_debug;
-        gpuErrchk(cudaMalloc((void**)&cuda_KCDIsource, sz));
-        gpuErrchk(cudaMalloc((void**)&cuda_ESW, sz));
-        gpuErrchk(cudaMalloc((void**)&cuda_debug, sz));
-        cudaMemcpy(cuda_KCDIsource, KCDIsource->data, sz, cudaMemcpyHostToDevice);
-
-	setups.multiplyFresnelPhaseMid(cuda_KCDIsource, setups.d-setups.dKCDI);
-	setups.propagateMid(cuda_KCDIsource, cuda_KCDIsource, 1);
-	cudaConvertFO<<<numBlocks,threadsPerBlock>>>(cuda_KCDIsource);
-        cudaMemcpy(gkp1->data,cuda_KCDIsource, sz, cudaMemcpyDeviceToHost);
-	convertFromComplexToInteger(gkp1, cache, MOD2, 0, 1, "ISW", 0);
-	imwrite("ISW.png", *cache);
-	setups.multiplyPatternPhaseMid(cuda_KCDIsource, setups.d-setups.dKCDI);
-	Mat KCDIInput = readImage(setups.KCDI.Intensity.c_str());
-	Mat *sample = extend(KCDIInput,setups.oversampling);
-	Mat* samplewf = convertFromIntegerToComplex(*sample,0,0);
-        cudaMemcpy(cuda_ESW, samplewf->data, sz, cudaMemcpyHostToDevice);
-	calcESW<<<numBlocks,threadsPerBlock>>>(cuda_ESW, cuda_KCDIsource);
-	
-        cudaMemcpy(gkp1->data,cuda_ESW, sz, cudaMemcpyDeviceToHost);
-	convertFromComplexToInteger(gkp1, cache, MOD2, 0, 1);
-	imwrite("ESW.png", *cache);
-
-	setups.multiplyFresnelPhase(cuda_ESW, setups.dKCDI);
-
-	setups.propagateKCDI(cuda_ESW, cuda_ESW, 1);
-
-        cudaMemcpy(gkp1->data,cuda_ESW, sz, cudaMemcpyDeviceToHost);
-	convertFromComplexToInteger(gkp1, cache, MOD2, 0, 1);
-	imwrite("ESWPattern.png", *cache);
-        cudaMemcpy(cuda_ESW, gkp1->data, sz, cudaMemcpyHostToDevice);
-	setups.multiplyPatternPhase(cuda_ESW, setups.dKCDI);
-
-        cudaMemcpy(cuda_KCDIsource, KCDIsource->data, sz, cudaMemcpyHostToDevice);
-	setups.multiplyFresnelPhase(cuda_KCDIsource, setups.d);
-	setups.propagate(cuda_KCDIsource, cuda_KCDIsource, 1);
-	cudaConvertFO<<<numBlocks,threadsPerBlock>>>(cuda_KCDIsource);
-	setups.multiplyPatternPhase(cuda_KCDIsource, setups.d);
-	add<<<numBlocks,threadsPerBlock>>>(cuda_KCDIsource, cuda_ESW);
-
-        cudaMemcpy(KCDIsource->data,cuda_KCDIsource, sz, cudaMemcpyDeviceToHost);
-	convertFromComplexToInteger(KCDIsource, cache, MOD2, 0, 1);
-	imwrite("KCDIPat.png", *cache);
-
-      }else{
-        
-	//convert from ESW to object
-	setups.multiplyFresnelPhase(cuda_ESW, -setups.dKCDI);
-	calcO<<<numBlocks,threadsPerBlock>>>(cuda_ESW, cuda_KCDIsource);
-        cudaMemcpy(gkp1->data,cuda_ESW, sz, cudaMemcpyDeviceToHost);
-	convertFromComplexToInteger(gkp1, cache, MOD2, 0, 1);
-	imwrite("object.png", *cache);
-
-        //TBD
-      }
+    if(setups.doIteration) {
+      fftresult = phaseRetrieve(setups, targetfft, gkp1, cache, fftresult); //fftresult is the starting point of the iteration
+      convertFromComplexToInteger( gkp1,cache, MOD2,0);
+      imwrite("recon_intensity.png",*cache);
+      convertFromComplexToInteger(gkp1, cache, PHASE,0);
+      imwrite("recon_phase.png",*cache);
+      convertFromComplexToInteger( fftresult, cache, MOD2,0);
+      imwrite("recon_pattern.png",*cache);
+      FileStorage fs(setups.common.restart.c_str(),FileStorage::WRITE);
+      fs<<"data"<<*fftresult;
+      fs.release();
     }
 
+    //Now let's do KCDI
+    if(setups.doKCDI){ 
+      Mat* floatCache = autocorrelation;  //reuse the memory created for autocorrelation
+      int sz = setups.row*setups.column*sizeof(complexFormat);
+      complexFormat* cuda_KCDIAmp, *cuda_ESW, *cuda_debug, *cuda_ESWP, *cuda_ESWPattern;
+      gpuErrchk(cudaMalloc((void**)&cuda_KCDIAmp, sz));
+      gpuErrchk(cudaMalloc((void**)&cuda_ESW, sz));
+      gpuErrchk(cudaMalloc((void**)&cuda_ESWP, sz));
+      gpuErrchk(cudaMalloc((void**)&cuda_ESWPattern, sz));
+      gpuErrchk(cudaMalloc((void**)&cuda_debug, sz));
+      if(setups.runSim){
+        cudaMemcpy(cuda_KCDIAmp, KCDIsource->data, sz, cudaMemcpyHostToDevice);
 
+        setups.multiplyFresnelPhaseMid(cuda_KCDIAmp, setups.d-setups.dKCDI);
+        setups.propagateMid(cuda_KCDIAmp, cuda_KCDIAmp, 1);
+	cudaConvertFO<<<numBlocks,threadsPerBlock>>>(cuda_KCDIAmp);
+        setups.multiplyPatternPhaseMid(cuda_KCDIAmp, setups.d-setups.dKCDI);
+	
+        cudaMemcpy(floatCache->data,cuda_KCDIAmp, sz, cudaMemcpyDeviceToHost);
+        convertFromComplexToInteger(floatCache, cache, MOD2, 0, 1, "ISW", 1);
+        imwrite("ISW.png", *cache);
+
+        Mat KCDIInput = readImage(setups.KCDI.Intensity.c_str());
+        Mat *sample = extend(KCDIInput,setups.oversampling);
+        Mat* samplewf = convertFromIntegerToComplex(*sample,0,0);
+        cudaMemcpy(cuda_ESW, samplewf->data, sz, cudaMemcpyHostToDevice);
+        calcESW<<<numBlocks,threadsPerBlock>>>(cuda_ESW, cuda_KCDIAmp);
+        cudaMemcpy(floatCache->data,cuda_ESW, sz, cudaMemcpyDeviceToHost);
+        convertFromComplexToInteger(floatCache, cache, MOD2, 0, 1, "sim ESW", 1);
+        imwrite("ESW.png", *cache);
+
+        setups.multiplyFresnelPhase(cuda_ESW, setups.dKCDI);
+        setups.propagateKCDI(cuda_ESW, cuda_ESW, 1);
+        //setups.multiplyPatternPhase(cuda_ESW, setups.dKCDI); //the same effect as setups.multiplyPatternPhase(cuda_KCDIAmp, -setups.dKCDI);
+        cudaMemcpy(floatCache->data,cuda_ESW, sz, cudaMemcpyDeviceToHost);
+        convertFromComplexToInteger(floatCache, cache, MOD2, 0, 1, "ESW pattern",1);
+        imwrite("ESWPattern.png", *cache);
+
+        cudaMemcpy(cuda_KCDIAmp, KCDIsource->data, sz, cudaMemcpyHostToDevice);
+        setups.multiplyFresnelPhase(cuda_KCDIAmp, setups.d);
+        setups.propagate(cuda_KCDIAmp, cuda_KCDIAmp, 1); // equivalent to fftresult
+	cudaConvertFO<<<numBlocks,threadsPerBlock>>>(cuda_KCDIAmp);
+        setups.multiplyPatternPhase(cuda_KCDIAmp, setups.d);
+        setups.multiplyPatternPhase(cuda_KCDIAmp, -setups.dKCDI);
+
+        cudaMemcpy(floatCache->data,cuda_KCDIAmp, sz, cudaMemcpyDeviceToHost);
+        convertFromComplexToInteger(floatCache, cache, MOD2, 0, 1, "KCDI source Pattern",1);
+        imwrite("srcPattern.png", *cache);
+
+        add<<<numBlocks,threadsPerBlock>>>(cuda_KCDIAmp, cuda_ESW);
+
+        cudaMemcpy(KCDIsource->data,cuda_KCDIAmp, sz, cudaMemcpyDeviceToHost);
+        convertFromComplexToInteger(KCDIsource, cache, MOD2, 0, 1, "KCDI intensity", 1);
+        imwrite("KCDI_logintensity.png", *cache); //something is off, edge is not symmetric between x and y.
+        convertFromComplexToInteger(KCDIsource, cache, PHASE, 0, 1, "KCDI phase", 0);
+        imwrite("KCDI_phase.png", *cache); //something is off, edge is not symmetric between x and y.
+        convertFromComplexToInteger(KCDIsource, cache, MOD2, 0, 1);
+        imwrite("KCDI_intensity.png", *cache);
+
+      }else{
+        Mat pattern = readImage(setups.KCDI.Pattern.c_str());
+        Mat* amp = convertFromIntegerToComplex(pattern, 0, 0);
+        cudaMemcpy(cuda_KCDIAmp, amp->data, sz, cudaMemcpyHostToDevice);
+        delete amp;
+      }
+      //KCDI reconstruction needs:
+      //  1. fftresult from previous phaseRetrieve
+      //  2. KCDI pattern.
+      //Storage:
+      //  1. Amp_i
+      //  2. ESW
+      //  3. ISW
+      //  4. sqrt(KCDImod2)
+      //
+      //KCDI reconstruction procedure:
+      //      Amp_i = PatternPhase_d/PatternPhase_KCDI*fftresult
+      //  1. ISW = IFFT(Amp_i)
+      //  2. ESW = IFFT{(sqrt(KCDImod2)/mod(Amp_i)-1)*(Amp_i)}
+      //  3. validate: |FFT(ISW+ESW)| = sqrt(KCDImod2)
+      //  4. if(|ESW+ISW| > |ISW|) ESW' = |ISW|/|ESW+ISW|*(ESW+ISW)-ISW
+      //     else ESW'=ESW
+      //     ESW'->ESW
+      //  5. ESWfft = FFT(ESW)
+      //  6. ESWfft' = sqrt(KCDImod2)/|Amp_i+ESWfft|*(Amp_i+ESWfft)-Amp_i
+      //  7. ESW = IFFT(ESWfft')
+      //  repeat from step 4
+      Real* cuda_KCDImod;
+      gpuErrchk(cudaMalloc((void**)&cuda_KCDImod, sz/2));
+      getMod<<<numBlocks,threadsPerBlock>>>(cuda_KCDImod, cuda_KCDIAmp);
+
+      complexFormat* cuda_ISW;
+      gpuErrchk(cudaMalloc((void**)&cuda_ISW, sz));
+      cudaMemcpy(cuda_KCDIAmp, fftresult->data, sz, cudaMemcpyHostToDevice);
+      cudaConvertFO<<<numBlocks,threadsPerBlock>>>(cuda_KCDIAmp);
+      setups.multiplyPatternPhase(cuda_KCDIAmp, setups.d);
+      setups.multiplyPatternPhase(cuda_KCDIAmp, -setups.dKCDI);
+      setups.propagateKCDI(cuda_KCDIAmp, cuda_ISW, 0);
+
+      cudaMemcpy(floatCache->data,cuda_KCDIAmp, sz, cudaMemcpyDeviceToHost);
+      convertFromComplexToInteger(floatCache, cache, MOD2, 0, 1, "amp", 0);
+      imwrite("amp.png", *cache);
+
+      initESW<<<numBlocks,threadsPerBlock>>>(cuda_ESW, cuda_KCDImod, cuda_KCDIAmp);
+      cudaMemcpy(floatCache->data,cuda_ISW, sz, cudaMemcpyDeviceToHost);
+      convertFromComplexToInteger(floatCache, cache, MOD2, 0, 1, "ISW recon", 1);
+      imwrite("ISW_debug.png", *cache);
+
+      setups.propagateKCDI(cuda_ESW, cuda_ESW, 0);
+      cudaMemcpy(cuda_ESWP, cuda_ESW, sz, cudaMemcpyDeviceToDevice);
+      for(int iter = 0; iter < setups.nIterKCDI ;iter++){
+        applyESWSupport<<<numBlocks,threadsPerBlock>>>(cuda_ESW, cuda_ISW, cuda_ESWP);
+        setups.propagateKCDI(cuda_ESW, cuda_ESWPattern, 1);
+        applyESWMod<<<numBlocks,threadsPerBlock>>>(cuda_ESWPattern, cuda_KCDImod, cuda_KCDIAmp);
+        setups.propagateKCDI(cuda_ESWPattern, cuda_ESWP, 0);
+      }
+
+      //convert from ESW to object
+      setups.propagateKCDI(cuda_ESW, cuda_ESWPattern, 1);
+      add<<<numBlocks,threadsPerBlock>>>(cuda_ESWPattern,cuda_KCDIAmp);
+      cudaMemcpy(floatCache->data,cuda_ESWPattern, sz, cudaMemcpyDeviceToHost);
+      convertFromComplexToInteger(floatCache, cache, MOD2, 0, 1, "ESW pattern recon", 1);
+      imwrite("ESW_pattern_recon.png", *cache);
+
+      cudaMemcpy(floatCache->data,cuda_ESWP, sz, cudaMemcpyDeviceToHost);
+      convertFromComplexToInteger(floatCache, cache, MOD2, 0, 1, "ESW recon", 1);
+      imwrite("ESW_recon.png", *cache);
+
+      applyESWSupport<<<numBlocks,threadsPerBlock>>>(cuda_ESW, cuda_ISW, cuda_ESWP);
+      calcO<<<numBlocks,threadsPerBlock>>>(cuda_ESW, cuda_ISW);
+      cudaMemcpy(floatCache->data,cuda_ESW, sz, cudaMemcpyDeviceToHost);
+      convertFromComplexToInteger(floatCache, cache, MOD2, 0, 1, "recon object");
+      imwrite("object.png", *cache);
+    }
     return 0;
 }
 
