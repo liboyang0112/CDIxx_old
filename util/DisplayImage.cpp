@@ -19,15 +19,15 @@ int main(int argc, char** argv )
 //       printf("usage: ./DisplayImage <Image_Path>\n");
 //       return -1;
 //   }
-    Mat imagein = imread( argv[1], IMREAD_UNCHANGED );
+//    Mat imagein = imread( argv[1], IMREAD_UNCHANGED );
     //Mat imagein = imread( argv[1], IMREAD_GRAYSCALE );
-    int row = imagein.rows;
-    int column = imagein.cols;
+//    int row = imagein.rows;
+//    int column = imagein.cols;
     int threshold = 1;
-//    int row = 1000;
-//    int column = 1000;
+    int row = 150;
+    int column = 150;
     Mat image (row, column, format_cv, Scalar::all(0));
-    cout << imagein<<endl;
+//    cout << imagein<<endl;
     /*j
     pixeltype* rowp;
     pixeltype* rowo;
@@ -82,6 +82,6 @@ int main(int argc, char** argv )
     }
     //namedWindow("Display Image", WINDOW_FREERATIO );
     */
-    imwrite("image.png", imagein);
+    imwrite("image.png", image);
     return 0;
 }

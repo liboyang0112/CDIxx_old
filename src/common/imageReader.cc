@@ -78,14 +78,14 @@ Mat readImage(const char* name, bool isFrequency, Mat **mask){
     return read16bitImage<uint16_t>(imagein,16);
   }else{  //Image data is float
     printf("Image depth %d is not recognized as integer type (%d or %d), Image data is treated as floats\n", imagein.depth(), CV_8U, CV_16U);
-    Mat *tmp = convertFromComplexToInteger<Real>(&imagein,0,MOD,0,1,"input",1); //Here we save the logarithm of the input image
-    imwrite("inputs.png", *tmp);
-    delete tmp;
     Mat image(imagein.rows, imagein.cols, float_cv_format(2));
     auto f = [&](int x, int y, Real &data, fftw_format &dataout){
       dataout = fftw_format(sqrt(max(Real(0),data)),0);
     };
-    imageLoop<decltype(f),Real,fftw_format>(&imagein,&image,&f,1);
+    imageLoop<decltype(f),Real,fftw_format>(&imagein,&image,&f,0);
+    Mat *tmp = convertFromComplexToInteger<Real>(&imagein,0,MOD2,0,1,"input",0); //Here we save the logarithm of the input image
+    imwrite("inputs.png", *tmp);
+    delete tmp;
     return image;
   }
 }
