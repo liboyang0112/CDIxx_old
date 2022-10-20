@@ -49,6 +49,7 @@ public:
   int beamStopSize = 10;
   int nIter = 2000;
   int nIterKCDI = 2000;
+  int noiseLevel = 0;
 //float configs
   Real exposure = 0.1;
   Real oversampling = 3;

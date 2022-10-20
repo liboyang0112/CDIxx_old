@@ -176,13 +176,22 @@ __global__  void applyESWMod(complexFormat* ESW, Real* mod, complexFormat* amp){
   int x = blockIdx.x * blockDim.x + threadIdx.x;
   int y = blockIdx.y * blockDim.y + threadIdx.y;
   if(x >= cuda_row || y >= cuda_column) return;
+  //Real tolerance = .5/cuda_rcolor*cuda_scale+5./cuda_rcolor; // fluctuation caused by bit depth and noise
   int index = x*cuda_column + y;
   auto tmp = amp[index];
   auto sum = cuCaddf(ESW[index],tmp);
   Real factor = 0;
-  if(cuCabsf(sum)!=0)
+  if(fabs(cuCabsf(sum))>1e-10){
 	  factor = mod[index]/cuCabsf(sum);
-  if(mod[index] >= 0.99) factor = max(0.99/cuCabsf(sum), 1.);
+	  /*
+	  Real mod2 = mod[index]*mod[index];
+	  Real mod2s = sum.x*sum.x+sum.y*sum.y;
+	  if(mod2+tolerance < mod2s) factor = sqrt((mod2+tolerance)/mod2s);
+	  else if(mod2-tolerance > mod2s) factor = sqrt((mod2-tolerance)/mod2s);
+	  else factor=1;
+	  */
+  }
+  //if(mod[index] >= 0.99) factor = max(0.99/cuCabsf(sum), 1.);
   //printf("factor=%f, mod=%f, sum=%f\n", factor, mod[index], cuCabsf(sum));
   ESW[index].x = factor*sum.x-tmp.x;
   ESW[index].y = factor*sum.y-tmp.y;
@@ -264,7 +273,7 @@ __global__ void calcO(complexFormat* ESW, complexFormat* ISW){
   int y = blockIdx.y * blockDim.y + threadIdx.y;
   if(x >= cuda_row || y >= cuda_column) return;
   int index = x*cuda_column + y;
-  if(cuCabsf(ISW[index])<1e-2) {
+  if(cuCabsf(ISW[index])<0.3) {
     ESW[index].x = ESW[index].y = 0;
     return;
   }
@@ -278,7 +287,7 @@ __global__ void calcO(complexFormat* ESW, complexFormat* ISW){
   ESW[index].y=tmp.y;
 }
 
-__global__ void applyMod(complexFormat* source, complexFormat* target, ImageMask *bs = 0, bool loose=0, int iter = 0){
+__global__ void applyMod(complexFormat* source, complexFormat* target, ImageMask *bs = 0, bool loose=0, int iter = 0, int noiseLevel = 0){
   assert(source!=0);
   assert(target!=0);
   int x = blockIdx.x * blockDim.x + threadIdx.x;
@@ -292,7 +301,7 @@ __global__ void applyMod(complexFormat* source, complexFormat* target, ImageMask
 	  if(iter > 500) return;
 	  else mod2 = maximum+1;
   }
-  Real tolerance = 1./cuda_rcolor*cuda_scale;//+30./cuda_rcolor; // fluctuation caused by bit depth and noise
+  Real tolerance = 1./cuda_rcolor*cuda_scale+1.5*sqrtf(noiseLevel)/cuda_rcolor; // fluctuation caused by bit depth and noise
   complexFormat sourcedata = source[index];
   Real ratiox = 1;
   Real ratioy = 1;
@@ -559,11 +568,11 @@ Mat* phaseRetrieve( experimentConfig &setups, Mat* targetfft, Mat* &gkp1, Mat *c
 	}
       }
       now = std::chrono::high_resolution_clock::now();
-      if(useBS) applyMod<<<numBlocks,threadsPerBlock>>>(cuda_fftresult,cuda_targetfft,cir.cuda, !setups.reconAC || iter > 1000,iter);  //apply mod to fftresult, Pm
-      else applyMod<<<numBlocks,threadsPerBlock>>>(cuda_fftresult,cuda_targetfft,0, !setups.reconAC || iter > 1000,iter);  //apply mod to fftresult, Pm
+      if(useBS) applyMod<<<numBlocks,threadsPerBlock>>>(cuda_fftresult,cuda_targetfft,cir.cuda, !setups.reconAC || iter > 1000,iter, setups.noiseLevel);  //apply mod to fftresult, Pm
+      else applyMod<<<numBlocks,threadsPerBlock>>>(cuda_fftresult,cuda_targetfft,0, !setups.reconAC || iter > 1000,iter, setups.noiseLevel);  //apply mod to fftresult, Pm
       if(useDM) {
-        if(useBS) applyMod<<<numBlocks,threadsPerBlock>>>(cuda_pmpsg,cuda_targetfft,cir.cuda, !setups.reconAC || iter > 1000,iter);  
-        else applyMod<<<numBlocks,threadsPerBlock>>>(cuda_pmpsg,cuda_targetfft,0, !setups.reconAC || iter > 1000, iter);
+        if(useBS) applyMod<<<numBlocks,threadsPerBlock>>>(cuda_pmpsg,cuda_targetfft,cir.cuda, !setups.reconAC || iter > 1000,iter, setups.noiseLevel);  
+        else applyMod<<<numBlocks,threadsPerBlock>>>(cuda_pmpsg,cuda_targetfft,0, !setups.reconAC || iter > 1000, iter, setups.noiseLevel);
       }
       time_applyMod+=std::chrono::high_resolution_clock::now()-now;
       
@@ -987,8 +996,7 @@ int main(int argc, char** argv )
     Real decay = scale;
     if(setups.runSim) decay=1;
     std::default_random_engine generator;
-    Real noiseLevel = 0;
-    std::poisson_distribution<int> distribution(noiseLevel);
+    std::poisson_distribution<int> distribution(setups.noiseLevel);
     Mat *autocorrelation = new Mat(row,column,float_cv_format(2),Scalar::all(0.));
     for(int i = 0; i<row*column; i++){ //remove the phase information
      // Real randphase = arg(tmp);//static_cast<Real>(rand())/RAND_MAX*2*pi;
@@ -998,7 +1006,7 @@ int main(int argc, char** argv )
       if(setups.runSim&&setups.simCCDbit) {
         int range= pow(2,16);
         mod = sqrt(((Real)floor(pow(mod,2)*range))/(range)); //assuming we use 16bit CCD
-        mod = sqrt(max(0.,pow(mod,2)+Real(distribution(generator)-noiseLevel)/range)); //Poisson noise
+        mod = sqrt(max(0.,pow(mod,2)+Real(distribution(generator)-setups.noiseLevel)/range)); //Poisson noise
         data = complex<Real>(mod,0); 
       }
       //datacor[0] = pow(mod,2)*(tx-row/2)*(ty-column/2)/90; // ucore is the derivitaves of the diffraction pattern: append *(tx-row/2)*(ty-column/2)/20;
@@ -1129,16 +1137,17 @@ int main(int argc, char** argv )
         setups.multiplyPatternPhaseMid(cuda_KCDIAmp, setups.d-setups.dKCDI);
 	
         cudaMemcpy(floatCache->data,cuda_KCDIAmp, sz, cudaMemcpyDeviceToHost);
-        convertFromComplexToInteger(floatCache, cache, MOD2, 0, 1, "ISW", 1);
+        convertFromComplexToInteger(floatCache, cache, MOD2, 0, 1, "ISW", 0);
         imwrite("ISW.png", *cache);
 
         Mat KCDIInput = readImage(setups.KCDI.Intensity.c_str());
         Mat *sample = extend(KCDIInput,setups.oversampling);
+	imwrite("KCDIsample.png",*sample);
         Mat* samplewf = convertFromIntegerToComplex(*sample,0,0);
         cudaMemcpy(cuda_ESW, samplewf->data, sz, cudaMemcpyHostToDevice);
         calcESW<<<numBlocks,threadsPerBlock>>>(cuda_ESW, cuda_KCDIAmp);
         cudaMemcpy(floatCache->data,cuda_ESW, sz, cudaMemcpyDeviceToHost);
-        convertFromComplexToInteger(floatCache, cache, MOD2, 0, 1, "sim ESW", 1);
+        convertFromComplexToInteger(floatCache, cache, MOD2, 0, 1, "sim ESW", 0);
         imwrite("ESW.png", *cache);
 
         setups.multiplyFresnelPhase(cuda_ESW, setups.dKCDI);
@@ -1163,15 +1172,27 @@ int main(int argc, char** argv )
         add<<<numBlocks,threadsPerBlock>>>(cuda_KCDIAmp, cuda_ESW);
 
         cudaMemcpy(KCDIsource->data,cuda_KCDIAmp, sz, cudaMemcpyDeviceToHost);
+        if(setups.simCCDbit) {
+	  for(int index = 0; index < row*column; index++){	
+            fftw_format &data = ((fftw_format*)KCDIsource->data)[index];
+            int range= pow(2,16);
+            Real mod = abs(data);
+            mod = sqrt(((Real)floor(pow(mod,2)*range))/(range)); //assuming we use 16bit CCD
+            mod = sqrt(max(0.,pow(mod,2)+Real(distribution(generator)-setups.noiseLevel)/range)); //Poisson noise
+	    if(mod*mod*rcolor < 2*sqrt(setups.noiseLevel)) mod = 0;
+            data = complex<Real>(mod,0); 
+	  }
+          cudaMemcpy(cuda_KCDIAmp, KCDIsource->data, sz, cudaMemcpyHostToDevice);
+        }
         convertFromComplexToInteger(KCDIsource, cache, MOD2, 0, 1, "KCDI intensity", 1);
-        imwrite("KCDI_logintensity.png", *cache); //something is off, edge is not symmetric between x and y.
+        imwrite("KCDI_logintensity.png", *cache); 
         convertFromComplexToInteger(KCDIsource, cache, PHASE, 0, 1, "KCDI phase", 0);
-        imwrite("KCDI_phase.png", *cache); //something is off, edge is not symmetric between x and y.
+        imwrite("KCDI_phase.png", *cache); 
         convertFromComplexToInteger(KCDIsource, cache, MOD2, 0, 1);
-        imwrite("KCDI_intensity.png", *cache);
+        imwrite(setups.KCDI.Pattern.c_str(), *cache);
 
       }else{
-        Mat pattern = readImage(setups.KCDI.Pattern.c_str());
+        Mat pattern = readImage(setups.KCDI.Pattern.c_str()); //reconstruction is better after integerization
         Mat* amp = convertFromIntegerToComplex(pattern, 0, 0);
         cudaMemcpy(cuda_KCDIAmp, amp->data, sz, cudaMemcpyHostToDevice);
         delete amp;
@@ -1220,7 +1241,7 @@ int main(int argc, char** argv )
       initESW<<<numBlocks,threadsPerBlock>>>(cuda_ESW, cuda_KCDImod, cuda_KCDIAmp);
       setups.propagateKCDI(cuda_ESW, cuda_ESW, 0);
       cudaMemcpy(cuda_ESWP, cuda_ESW, sz, cudaMemcpyDeviceToDevice);
-      Real *cuda_steplength, *steplength, lengthsum;
+      Real *cuda_steplength, *steplength;//, lengthsum;
       steplength = (Real*)malloc(sz/2);
       cudaMalloc((void**)&cuda_steplength, sz/2);
       for(int iter = 0; iter < setups.nIterKCDI ;iter++){

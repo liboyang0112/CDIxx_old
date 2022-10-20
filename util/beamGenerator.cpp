@@ -15,8 +15,8 @@ double gaussian(double x, double y, double sigma){
 }
 int main(int argc, char** argv )
 {
-    int row = 150;
-    int column = 150;
+    int row = 256;
+    int column = 256;
     Mat image (row, column, float_cv_format(1), Scalar::all(0));
     pixeltype* rowp;
     Real* rowo;
@@ -32,7 +32,7 @@ int main(int argc, char** argv )
 	rowo =   image.ptr<Real>(x);
 	//rowo = image.ptr<char>(x);
         for(int y = 0; y<column; y++){
-		if(hypot(x-row/2,y-row/2)<75) rowo[y] = gaussian(x-row/2,y-row/2,70);
+		if(hypot(x-row/2,y-row/2)<128) rowo[y] = gaussian(x-row/2,y-row/2,128);
 	}
     }
 

@@ -94,6 +94,7 @@ readConfig::readConfig(const char* configfile){
     Job.lookupValue("reconAC",reconAC);
     Job.lookupValue("restart",restart);
     Job.lookupValue("nIterKCDI",nIterKCDI);
+    Job.lookupValue("noiseLevel",noiseLevel);
     Job.lookupValue("nIter",nIter);
   }
   catch(const SettingNotFoundException &nfex)
