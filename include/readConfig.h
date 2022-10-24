@@ -52,6 +52,7 @@ public:
   int noiseLevel = 0;
 //float configs
   Real exposure = 0.1;
+  Real exposureKCDI = 0.1;
   Real oversampling = 3;
   Real lambda = 0.01;
   Real d = 16e3;

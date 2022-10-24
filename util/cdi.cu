@@ -273,7 +273,7 @@ __global__ void calcO(complexFormat* ESW, complexFormat* ISW){
   int y = blockIdx.y * blockDim.y + threadIdx.y;
   if(x >= cuda_row || y >= cuda_column) return;
   int index = x*cuda_column + y;
-  if(cuCabsf(ISW[index])<0.3) {
+  if(cuCabsf(ISW[index])<0.003) {
     ESW[index].x = ESW[index].y = 0;
     return;
   }
@@ -439,7 +439,7 @@ public:
       resolution = lambda*dKCDI/(row*pixelsize);
       printf("Resolution=%4.2fum\n", resolution);
       enhancementKCDI = pow(pixelsize,2)*sqrt(row*column)/(lambda*dKCDI); // this guarentee energy conservation
-      enhancementKCDI *= exposure;
+      enhancementKCDI *= exposureKCDI;
       fresnelFactorKCDI = lambda*dKCDI/pow(pixelsize,2)/row/column;
       forwardFactorKCDI = fresnelFactorKCDI*enhancementKCDI;
       inverseFactorKCDI = 1./row/column/forwardFactorKCDI;
@@ -1159,7 +1159,7 @@ int main(int argc, char** argv )
 
         cudaMemcpy(cuda_KCDIAmp, KCDIsource->data, sz, cudaMemcpyHostToDevice);
         setups.multiplyFresnelPhase(cuda_KCDIAmp, setups.d);
-        setups.propagate(cuda_KCDIAmp, cuda_KCDIAmp, 1); // equivalent to fftresult
+        setups.propagateKCDI(cuda_KCDIAmp, cuda_KCDIAmp, 1); // equivalent to fftresult
         cudaMemcpy(cuda_KCDIAmp_SIM,cuda_KCDIAmp, sz, cudaMemcpyDeviceToDevice);
 	cudaConvertFO<<<numBlocks,threadsPerBlock>>>(cuda_KCDIAmp);
         setups.multiplyPatternPhase(cuda_KCDIAmp, setups.d);
@@ -1227,6 +1227,7 @@ int main(int argc, char** argv )
       cudaMemcpy(cuda_KCDIAmp, fftresult->data, sz, cudaMemcpyHostToDevice);
       //cudaMemcpy(cuda_KCDIAmp, cuda_KCDIAmp_SIM, sz, cudaMemcpyHostToDevice);
       cudaConvertFO<<<numBlocks,threadsPerBlock>>>(cuda_KCDIAmp);
+      applyNorm<<<numBlocks,threadsPerBlock>>>(cuda_KCDIAmp, sqrt(setups.exposureKCDI/setups.exposure));
       setups.multiplyPatternPhase(cuda_KCDIAmp, setups.d);
       setups.multiplyPatternPhase(cuda_KCDIAmp, -setups.dKCDI);
       cudaMemcpy(floatCache->data,cuda_KCDIAmp, sz, cudaMemcpyDeviceToHost);

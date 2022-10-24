@@ -1,6 +1,7 @@
 #include <stdio.h>
 #include <opencv2/opencv.hpp>
 #include "format.h"
+#include <random>
 using namespace cv;
 using namespace std;
 //using pixeltype=uint16_t;
@@ -18,6 +19,8 @@ int main(int argc, char** argv )
     int row = 256;
     int column = 256;
     Mat image (row, column, float_cv_format(1), Scalar::all(0));
+    auto seed = (unsigned)time(NULL);
+    srand(seed);
     pixeltype* rowp;
     Real* rowo;
     //char* rowo;
@@ -32,7 +35,14 @@ int main(int argc, char** argv )
 	rowo =   image.ptr<Real>(x);
 	//rowo = image.ptr<char>(x);
         for(int y = 0; y<column; y++){
-		if(hypot(x-row/2,y-row/2)<128) rowo[y] = gaussian(x-row/2,y-row/2,128);
+		double r = hypot(x-row/2,y-row/2);
+		if(abs(x-row/2)<=2) continue;
+		if(r<128) {
+          		Real randm = static_cast<Real>(rand())/RAND_MAX;
+			if(randm < 0.3) continue;
+			rowo[y] = gaussian(x-row/2,y-row/2,128);
+		}
+		if(r<60) rowo[y] *= 0.4;
 	}
     }
 
