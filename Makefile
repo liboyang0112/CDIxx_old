@@ -31,7 +31,7 @@ CPP_LIB=$(patsubst src/cpu/%.cc, ${LOCAL_LIB}/lib%.so,  ${CPP_LIB_SRC})
 
 CUDA_WRAP_LIB_SRC=$(wildcard src/gpu/*.cu)
 CUDA_WRAP_LIB_OBJ=$(patsubst src/gpu/%.cu, ${LOCAL_OBJ}/gpu/%_cu.o, ${CUDA_WRAP_LIB_SRC})
-CUDA_WRAP_LIB=$(patsubst src/gpu/%.cu, ${LOCAL_LIB}/lib%_cu.so,  ${CUDA_WRAP_LIB_SRC})
+CUDA_WRAP_LIB=${LOCAL_LIB}/libcudaWrap.so
 
 LINK_FLAGS_EXT=$(shell pkg-config --libs opencv4 hdf5 tbb fftw3) -lfftw3_mpi -lcholmod -lfftw3_threads -lm -lpthread -lconfig++
 LINK_FLAGS_EXT_CU=$(shell pkg-config --libs opencv4 hdf5)
@@ -42,7 +42,9 @@ LINK_FLAGS+=${LINK_FLAGS_CUDA_WRAP}
 INCLUDE_FLAGS=-I${LOCAL_INCLUDE} $(shell pkg-config --cflags opencv4 hdf5 mpi) -I/usr/include/suitesparse
 
 all: print
+	make -j16 objs
 	make -j16 commonlibs
+	make -j16 cudalibs
 	make -j16 exes
 
 print:
@@ -55,9 +57,9 @@ print:
 	@mkdir -p ${LOCAL_OBJ}
 	@mkdir -p ${LOCAL_OBJ}/gpu
 
-exes: objs libs ${CPP_EXE_RUN} ${CUDA_EXE_RUN}
-libs: commonlibs ${CUDA_WRAP_LIB}
-commonlibs: objs ${COMMON_C_LIB} ${COMMON_LIB} 
+exes: ${CPP_EXE_RUN} ${CUDA_EXE_RUN}
+cudalibs: ${CUDA_WRAP_LIB}
+commonlibs: ${COMMON_C_LIB} ${COMMON_LIB} 
 objs: ${COMMON_LIB_OBJ} ${CUDA_WRAP_LIB_OBJ} ${CPP_EXE_OBJ} ${COMMON_C_LIB_OBJ} ${CUDA_EXE_OBJ}
 
 
@@ -97,13 +99,13 @@ ${LOCAL_OBJ}/%.o: util/%.cpp
 ${LOCAL_OBJ}/%.o: src/common/%.cc
 	${CXX} -c -fPIC $< ${INCLUDE_FLAGS} -o $@
 
-${LOCAL_LIB}/lib%_cu.so: ${LOCAL_OBJ}/gpu/%_cu.o ${LOCAL_OBJ}/gpu/%link_cu.o
-	g++  -shared -o $@ $^ -L${LOCAL_LIB} -lsparse ${CUDA_LIB}
+${LOCAL_LIB}/libcudaWrap.so: ${CUDA_WRAP_LIB_OBJ} ${LOCAL_OBJ}/gpu/cudaWraplink.o
+	g++  -shared -o $@ $^ -L${LOCAL_LIB} -lsparse -lformat ${CUDA_LIB} ${LINK_FLAGS_EXT}
 
 ${LOCAL_OBJ}/gpu/%_cu.o: src/gpu/%.cu
 	${NVCC} -Xcompiler '-fPIC' -c $< -o $@ $(patsubst -pthread%, %, ${INCLUDE_FLAGS})
 
-${LOCAL_OBJ}/gpu/%link_cu.o: ${LOCAL_OBJ}/gpu/%_cu.o
-	${NVCC} -Xcompiler '-fPIC' -dlink $< -o $@
+${LOCAL_OBJ}/gpu/cudaWraplink.o: ${CUDA_WRAP_LIB_OBJ}
+	${NVCC} -Xcompiler '-fPIC' -dlink $^ -o $@
 clean:
 	rm -r lib/* obj/* bin/*

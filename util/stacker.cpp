@@ -11,11 +11,11 @@ auto format_cv = CV_16UC(1);
 static const int rcolor = pow(2,16);
 //using pixeltype=char;
 //auto format_cv = CV_8UC(1);
-double getRatio(Mat &bkg, Mat &lowint, Mat &highint){
+Real getRatio(Mat &bkg, Mat &lowint, Mat &highint){
   int row = lowint.rows;
   int column = lowint.cols;
-  double tot1 = 0;
-  double tot2 = 0;
+  Real tot1 = 0;
+  Real tot2 = 0;
   pixeltype* rowp;
   for(int x = 0; x < row ; x++){
     rowp = lowint.ptr<pixeltype>(x);
@@ -57,38 +57,41 @@ int main(int argc, char** argv )
     Mat image (row, column, format_cv, Scalar::all(0)); //log image
     Mat imagelogmerged (row/mergeDepth, column/mergeDepth, format_cv, Scalar::all(0)); //log image
     Mat imagefloat (row/mergeDepth, column/mergeDepth, float_cv_format(1), Scalar::all(0));
+    Mat overexposed (row/mergeDepth, column/mergeDepth, CV_8UC1, Scalar::all(0));
     //cout << imagein<<endl;
     pixeltype* rowp;
     pixeltype* rowo;
     pixeltype* rowb;
-    double* rowf;
+    Real* rowf;
+    char* rowoe;
     //char* rowo;
     int tot = 0;
-    double totx = 0;
-    double toty = 0;
-    double sumx = 0;
-    double sumy = 0;
+    Real totx = 0;
+    Real toty = 0;
+    Real sumx = 0;
+    Real sumy = 0;
     int max = 0;
-    vector<double> ratios;
+    vector<Real> ratios;
     ratios.resize(imagein.size()-1,0);
     //firstly, calculate the relative exposure time.
-    double maxratio = 1;
+    Real maxratio = 1;
     for(int i = 0 ; i < imagein.size()-1; i++){
       ratios[i] = getRatio(bkg,imagein[i],imagein[i+1]);
       maxratio*=ratios[i];
     }
     ratios.push_back(1);
     printf("maxratio=%f\n",maxratio);
-    double maxIntensity = 0;
+    Real maxIntensity = 0;
     for(int x = 0; x < row ; x++){
 	rowp = imagein[0].ptr<pixeltype>(x);
 	rowb = bkg.ptr<pixeltype>(x);
 	rowo =   image.ptr<pixeltype>(x);
-	rowf =   imagefloat.ptr<double>(x/mergeDepth);
+	rowoe =   overexposed.ptr<char>(x/mergeDepth);
+	rowf =   imagefloat.ptr<Real>(x/mergeDepth);
         for(int y = 0; y<column; y++){
-	    double intensity = rowp[y];
+	    Real intensity = rowp[y];
 	    if(intensity >= rcolor-1){
-              double ratio = ratios[0];
+              Real ratio = ratios[0];
               for(int i = 1;i < imagein.size(); i++){
                 intensity = imagein[i].ptr<pixeltype>(x)[y];
                 if(intensity<rcolor-1){
@@ -103,29 +106,30 @@ int main(int argc, char** argv )
 	      }
 	    }else
               intensity-=rowb[y];
-
+            if(imagein[imagein.size()-1].ptr<pixeltype>(x)[y] == rcolor-1) rowoe[y/mergeDepth] = 255;
+	    else rowoe[y/mergeDepth] = 0;
 	    rowf[y/mergeDepth]+=intensity/(rcolor-1)/maxratio/mergeDepth/mergeDepth;
 	    if(maxIntensity < rowf[y/mergeDepth]) maxIntensity = rowf[y/mergeDepth];
 
             rowo[y]=std::max(0.,floor(log2(intensity/maxratio)*pow(2,12)));//log2(rowp[y])*pow(2,11);
 	    tot+= rowp[y];
-	    totx += double(rowp[y]);
-	    toty += double(rowp[y]);
-	    sumx += double(rowp[y])*x/row;
-	    sumy += double(rowp[y])*y/row;
+	    totx += Real(rowp[y]);
+	    toty += Real(rowp[y]);
+	    sumx += Real(rowp[y])*x/row;
+	    sumy += Real(rowp[y])*y/row;
 	    if(max < rowp[y]) max = rowp[y];
 	}
 	//printf("\n");
     }
     printf("\ntot=%d,max=%d,middle=(%f,%f), max=%f\n",tot,max,sumx/totx,sumy/toty,maxIntensity);
-    double *data = (double*) imagefloat.data;
+    Real *data = (Real*) imagefloat.data;
     for(int i = 0; i < imagefloat.total(); i++){
-      double rat = 1;
+      Real rat = 1;
       for(int j = 0; j < imageout.size(); j++){
-        ((uint16_t*)imageout[j]->data)[i] = (uint16_t)floor(min(1.,std::max(0.,rat*data[i]))*65535);
+        ((uint16_t*)imageout[j]->data)[i] = (uint16_t)floor(min(Real(1),std::max(Real(0),rat*data[i]))*65535);
         if(j<imageout.size()-1) rat*=ratios[j];
       }
-      ((pixeltype*)imagelogmerged.data)[i]=std::max(0.,floor((log2(data[i])+16)*pow(2,12)));//log2(rowp[y])*pow(2,11);
+      ((pixeltype*)imagelogmerged.data)[i]=std::min(std::max(0.,floor((log2(data[i])+16)*pow(2,12))),rcolor-1.);//log2(rowp[y])*pow(2,11);
       data[i]/=maxIntensity;
     }
 
@@ -141,5 +145,6 @@ int main(int argc, char** argv )
     //imwrite("imageout2.png", *imageout[2]);
     imwrite("floatimage.tiff", imagefloat);
     imwrite("logimagemerged.png", imagelogmerged);
+    imwrite("overexposed.png", overexposed);
     return 0;
 }

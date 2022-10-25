@@ -30,6 +30,13 @@ inline void gpuAssert(cudaError_t code, const char *file, int line, bool abort=t
    }
 }
 
+__device__ __constant__ Real cuda_beta_HIO;
+__device__ __constant__ int cuda_row;
+__device__ __constant__ int cuda_column;
+__device__ __constant__ int cuda_rcolor;
+__device__ __constant__ Real cuda_scale;
+__device__ __constant__ int cuda_totalIntensity;
+
 using std::cout; using std::endl;
 using std::chrono::duration_cast;
 using std::chrono::milliseconds;
@@ -172,24 +179,22 @@ __global__  void initESW(complexFormat* ESW, Real* mod, complexFormat* amp){
   ESW[index].x = factor*tmp.x;
   ESW[index].y = factor*tmp.y;
 }
-__global__  void applyESWMod(complexFormat* ESW, Real* mod, complexFormat* amp){
+__global__  void applyESWMod(complexFormat* ESW, Real* mod, complexFormat* amp, int noiseLevel){
   int x = blockIdx.x * blockDim.x + threadIdx.x;
   int y = blockIdx.y * blockDim.y + threadIdx.y;
   if(x >= cuda_row || y >= cuda_column) return;
-  //Real tolerance = .5/cuda_rcolor*cuda_scale+5./cuda_rcolor; // fluctuation caused by bit depth and noise
+  Real tolerance = 0;//1./cuda_rcolor*cuda_scale+1.5*sqrtf(noiseLevel)/cuda_rcolor; // fluctuation caused by bit depth and noise
   int index = x*cuda_column + y;
   auto tmp = amp[index];
   auto sum = cuCaddf(ESW[index],tmp);
   Real factor = 0;
   if(fabs(cuCabsf(sum))>1e-10){
-	  factor = mod[index]/cuCabsf(sum);
-	  /*
+	  //factor = mod[index]/cuCabsf(sum);
 	  Real mod2 = mod[index]*mod[index];
 	  Real mod2s = sum.x*sum.x+sum.y*sum.y;
 	  if(mod2+tolerance < mod2s) factor = sqrt((mod2+tolerance)/mod2s);
 	  else if(mod2-tolerance > mod2s) factor = sqrt((mod2-tolerance)/mod2s);
 	  else factor=1;
-	  */
   }
   //if(mod[index] >= 0.99) factor = max(0.99/cuCabsf(sum), 1.);
   //printf("factor=%f, mod=%f, sum=%f\n", factor, mod[index], cuCabsf(sum));
@@ -1179,7 +1184,7 @@ int main(int argc, char** argv )
             Real mod = abs(data);
             mod = sqrt(((Real)floor(pow(mod,2)*range))/(range)); //assuming we use 16bit CCD
             mod = sqrt(max(0.,pow(mod,2)+Real(distribution(generator)-setups.noiseLevel)/range)); //Poisson noise
-	    if(mod*mod*rcolor < 2*sqrt(setups.noiseLevel)) mod = 0;
+	    if(mod*mod*rcolor < 1) mod = 0;
             data = complex<Real>(mod,0); 
 	  }
           cudaMemcpy(cuda_KCDIAmp, KCDIsource->data, sz, cudaMemcpyHostToDevice);
@@ -1255,7 +1260,7 @@ int main(int argc, char** argv )
 	if(lengthsum<1e-6) break;
 	*/
         setups.propagateKCDI(cuda_ESW, cuda_ESWPattern, 1);
-        applyESWMod<<<numBlocks,threadsPerBlock>>>(cuda_ESWPattern, cuda_KCDImod, cuda_KCDIAmp);
+        applyESWMod<<<numBlocks,threadsPerBlock>>>(cuda_ESWPattern, cuda_KCDImod, cuda_KCDIAmp, 0);//setups.noiseLevel);
         setups.propagateKCDI(cuda_ESWPattern, cuda_ESWP, 0);
       }
 

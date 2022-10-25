@@ -9,10 +9,10 @@ auto myCufftExec(Args... arg){
 	return cufftExecC2C(arg...);
 }
 using complexFormat=cufftComplex;
-__device__ __constant__ Real cuda_beta_HIO;
-__device__ __constant__ int cuda_row;
-__device__ __constant__ int cuda_column;
-__device__ __constant__ int cuda_rcolor;
-__device__ __constant__ Real cuda_scale;
-__device__ __constant__ int cuda_totalIntensity;
+extern __device__ __constant__ Real cuda_beta_HIO;
+extern __device__ __constant__ int cuda_row;
+extern __device__ __constant__ int cuda_column;
+extern __device__ __constant__ int cuda_rcolor;
+extern __device__ __constant__ Real cuda_scale;
+extern __device__ __constant__ int cuda_totalIntensity;
 #endif
