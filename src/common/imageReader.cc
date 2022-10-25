@@ -108,3 +108,81 @@ Mat* extend( Mat &src , Real ratio, Real val)
 //  imwrite("ext.png",*dst);
   return dst;
 }
+Mat* convertFromIntegerToComplex(Mat &image, Mat* cache, bool isFrequency, const char* label){
+  int row = image.rows;
+  int column = image.cols;
+  if(!cache) cache = new Mat(row, column, float_cv_format(2));
+  Real tot = 0;
+  pixeltype* rowp;
+  fftw_format* rowo;
+  int targetx, targety;
+  for(int x = 0; x < row ; x++){
+    if(isFrequency){
+      targetx = x<row/2?x+row/2:(x-row/2);
+    }else{
+      targetx = x;
+    }
+    rowp = image.ptr<pixeltype>(x);
+    rowo = cache->ptr<fftw_format>(targetx);
+    for(int y = 0; y<column; y++){
+      if(isFrequency){
+        targety = y<column/2?y+column/2:(y-column/2);
+      }else{
+	targety = y;
+      }
+      Real intensity = ((Real)rowp[y])/(rcolor-1);
+      fftw_format &datatmp = rowo[targety];
+      if(opencv_reverted) intensity = 1-intensity;
+      datatmp = fftw_format(sqrt(intensity),0);
+      tot += sqrt(intensity);
+    }
+  }
+  printf("total intensity %s: %f\n",label, tot);
+  return cache;
+}
+Mat* convertFromIntegerToComplex(Mat &image,Mat &phase,Mat* cache){
+  int row = image.rows;
+  int column = image.cols;
+  if(!cache) cache = new Mat(row, column, float_cv_format(2));
+  int tot = 0;
+  pixeltype *rowi, *rowp;
+  fftw_format *rowo;
+  for(int x = 0; x < row ; x++){
+    rowi = image.ptr<pixeltype>(x);
+    rowp = phase.ptr<pixeltype>(x);
+    rowo = cache->ptr<fftw_format>(x);
+    for(int y = 0; y<column; y++){
+      tot += rowp[y];
+      Real phase = rowp[y];
+      phase*=2*pi/rcolor;
+      phase-=pi;
+      phase*=0.2;
+      rowo[y] = fftw_format(sqrt(((Real)rowi[y])/rcolor)*cos(phase),sqrt(((Real)rowi[y])/rcolor)*sin(phase));
+    }
+  }
+  printf("total intensity: %d\n", tot);
+  return cache;
+}
+Real getVal(mode m, fftw_format &data){
+  switch(m){
+    case MOD:
+      return std::abs(data);
+      break;
+    case MOD2:
+      return pow(std::abs(data),2);
+      break;
+    case IMAG:
+      return data.imag();
+      break;
+    case PHASE:
+      if(std::abs(data)==0) return 0;
+      return (std::arg(data)+pi)/2/pi;
+      break;
+    default:
+      return data.real();
+  }
+}
+Real getVal(mode m, Real &data){
+  return data;
+}
+

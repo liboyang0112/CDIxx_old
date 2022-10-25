@@ -13,7 +13,7 @@
 #include "opencv2/imgcodecs.hpp"
 #include "opencv2/highgui.hpp"
 
-#include "common.h"
+#include "imageReader.h"
 #include <ctime>
 
 using std::cout; using std::endl;
@@ -74,6 +74,7 @@ int main(int argc, char** argv )
         inputField[x+y*row] = fftw_format(Emod*sin(phase),Emod*cos(phase));
       }
     }
+    printf("doing fftw\n");
     fftw(&imageInput, &imageTarget, 1);
     convertFromComplexToInteger(&imageInput, &image, MOD2,0);
     imwrite("inputIntensity.png",image);

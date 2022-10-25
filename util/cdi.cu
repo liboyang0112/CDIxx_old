@@ -878,7 +878,7 @@ int main(int argc, char** argv )
     beamStop.threshold = 0.5;
     beamStop.init_image(new Mat(row,column,float_cv_format(1)));
     C_circle *cuda_spt;
-    cudaMalloc((void**)&cuda_spt,sizeof(C_circle));
+    gpuErrchk(cudaMalloc((void**)&cuda_spt,sizeof(C_circle)));
     cudaMemcpy(cuda_spt, &cir, sizeof(C_circle), cudaMemcpyHostToDevice);
     createMask<<<numBlocks,threadsPerBlock>>>(beamStop.data, cuda_spt,1);
     beamStop.cpyFromGM();
