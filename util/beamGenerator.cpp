@@ -36,13 +36,13 @@ int main(int argc, char** argv )
 	//rowo = image.ptr<char>(x);
         for(int y = 0; y<column; y++){
 		double r = hypot(x-row/2,y-row/2);
-		if(abs(x-row/2)<=2) continue;
+	//	if(abs(x-row/2)<=2) continue;
 		if(r<128) {
           		Real randm = static_cast<Real>(rand())/RAND_MAX;
-			if(randm < 0.3) continue;
+	//		if(randm < 0.3) continue;
 			rowo[y] = gaussian(x-row/2,y-row/2,128);
 		}
-		if(r<60) rowo[y] *= 0.4;
+	//	if(r<60) rowo[y] *= 0.4;
 	}
     }
 

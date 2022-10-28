@@ -20,16 +20,36 @@
 #include "cudaConfig.h"
 #include "readConfig.h"
 
-#define gpuErrchk(ans) { gpuAssert((ans), __FILE__, __LINE__); }
-inline void gpuAssert(cudaError_t code, const char *file, int line, bool abort=true)
-{
-   if (code != cudaSuccess)
-   {
-      fprintf(stderr,"GPUassert: %s %s %d\n", cudaGetErrorString(code), file, line);
-      if (abort) exit(code);
-   }
-}
+#include <cub/device/device_reduce.cuh>
 
+struct CustomMax
+{
+    __device__ __forceinline__
+    Real operator()(const Real &a, const Real &b) const {
+        return (b > a) ? b : a;
+    }
+};
+
+Real findMax(Real* d_in, int num_items)
+{
+    Real *d_out = NULL;
+    cudaMalloc((void**)&d_out, sizeof(Real));
+
+    void            *d_temp_storage = NULL;
+    size_t          temp_storage_bytes = 0;
+    CustomMax max_op;
+    gpuErrchk(cub::DeviceReduce::Reduce(d_temp_storage, temp_storage_bytes, d_in, d_out, num_items, max_op, 0));
+    cudaMalloc(&d_temp_storage, temp_storage_bytes);
+
+    // Run
+    CubDebugExit(cub::DeviceReduce::Reduce(d_temp_storage, temp_storage_bytes, d_in, d_out, num_items, max_op, 0));
+    Real output;
+    cudaMemcpy(&output, d_out, sizeof(Real), cudaMemcpyDeviceToHost);
+
+    if (d_out) cudaFree(d_out);
+    if (d_temp_storage) cudaFree(d_temp_storage);
+    return output;
+}
 __device__ __constant__ Real cuda_beta_HIO;
 __device__ __constant__ int cuda_row;
 __device__ __constant__ int cuda_column;
@@ -278,8 +298,9 @@ __global__ void calcO(complexFormat* ESW, complexFormat* ISW){
   int y = blockIdx.y * blockDim.y + threadIdx.y;
   if(x >= cuda_row || y >= cuda_column) return;
   int index = x*cuda_column + y;
-  if(cuCabsf(ISW[index])<0.003) {
-    ESW[index].x = ESW[index].y = 0;
+  if(cuCabsf(ISW[index])<0.1) {
+    ESW[index].x = 1;
+    ESW[index].y = 0;
     return;
   }
   complexFormat tmp = cuCdivf(ESW[index],ISW[index]);
@@ -298,7 +319,7 @@ __global__ void applyMod(complexFormat* source, complexFormat* target, ImageMask
   int x = blockIdx.x * blockDim.x + threadIdx.x;
   int y = blockIdx.y * blockDim.y + threadIdx.y;
   if(x >= cuda_row || y >= cuda_column) return;
-  Real maximum = pow(mergeDepth,2)*cuda_scale*0.99;
+  Real maximum = pow(mergeDepth,2)*cuda_scale*0.95;
   int index = x*cuda_column + y;
   complexFormat targetdata = target[index];
   Real mod2 = targetdata.x*targetdata.x + targetdata.y*targetdata.y;
@@ -521,7 +542,6 @@ Mat* phaseRetrieve( experimentConfig &setups, Mat* targetfft, Mat* &gkp1, Mat *c
     std::ofstream fepF,fepS;
     fepF.open("epsilonF.txt",ios::out |(setups.restart? ios::app:std::ios_base::openmode(0)));
     fepS.open("epsilonS.txt",ios::out |(setups.restart? ios::app:std::ios_base::openmode(0)));
-    int niters = 5000;
     int tot = row*column;
     Mat objMod(row,column,float_cv_format(1));
     Mat* maskKernel;
@@ -552,7 +572,7 @@ Mat* phaseRetrieve( experimentConfig &setups, Mat* targetfft, Mat* &gkp1, Mat *c
     std::chrono::duration<int64_t, std::nano> time_FFT(0);
     std::chrono::duration<int64_t, std::nano> time_support(0);
     std::chrono::duration<int64_t, std::nano> time_norm(0);
-    for(int iter = 0; iter < niters; iter++){
+    for(int iter = 0; iter < setups.nIter; iter++){
       //start iteration
       if(iter%100==0) {
 	long tot = time_FFT.count()+time_norm.count()+time_support.count()+time_applyMod.count();
@@ -590,14 +610,8 @@ Mat* phaseRetrieve( experimentConfig &setups, Mat* targetfft, Mat* &gkp1, Mat *c
 	setups.propagate(cuda_pmpsg, cuda_pmpsg, 0);
         time_FFT+=std::chrono::high_resolution_clock::now()-now;
       }
-      bool updateMask = (iter > 1000) && iter%20==0 && useShrinkMap && iter!=0;
-      if(updateMask){
-        int size = floor(gaussianSigma*6); // r=3 sigma to ensure the contribution is negligible (0.01 of the maximum)
-        size = size/2*2+1; //ensure odd
-        maskKernel = gaussianKernel(size,size,gaussianSigma);
-      }
       now = std::chrono::high_resolution_clock::now();
-      applySupport<<<numBlocks,threadsPerBlock>>>(cuda_gkp1, cuda_gkprime, cuda_objMod,cuda_spt,iter,setups.fresnelFactor);
+      applySupport<<<numBlocks,threadsPerBlock>>>(cuda_gkp1, cuda_gkprime, cuda_objMod,cuda_spt,iter,setups.isFresnel? setups.fresnelFactor:0);
       time_support+=std::chrono::high_resolution_clock::now()-now;
 
       //if(iter==1){
@@ -607,10 +621,16 @@ Mat* phaseRetrieve( experimentConfig &setups, Mat* targetfft, Mat* &gkp1, Mat *c
       //exit(0);
       //}
 
+      bool updateMask = (iter > 1000) && iter%20==0 && useShrinkMap;
       if(updateMask){
+        int size = floor(gaussianSigma*6); // r=3 sigma to ensure the contribution is negligible (0.01 of the maximum)
+        size = size/2*2+1; //ensure odd
+        maskKernel = gaussianKernel(size,size,gaussianSigma);
         cudaMemcpy(objMod.data, cuda_objMod, sz/2, cudaMemcpyDeviceToHost);
         filter2D(objMod, *re.image,objMod.depth(),*maskKernel);
-	((ImageMask*)&re)->cpyToGM();
+	re.threshold = findMax(cuda_objMod, row*column)*0.16;
+	cudaMemcpy(cuda_spt, &re, sizeof(ImageMask), cudaMemcpyHostToDevice);
+	re.cpyToGM();
 	if(gaussianSigma>1.5) gaussianSigma*=0.99;
 	delete maskKernel;
       }
@@ -642,8 +662,9 @@ Mat* phaseRetrieve( experimentConfig &setups, Mat* targetfft, Mat* &gkp1, Mat *c
     }
     fepF.close();
     fepS.close();
+    if(useBS) applyMod<<<numBlocks,threadsPerBlock>>>(cuda_fftresult,cuda_targetfft,cir.cuda,1,setups.nIter, setups.noiseLevel);
+    else applyMod<<<numBlocks,threadsPerBlock>>>(cuda_fftresult,cuda_targetfft,0, 1,setups.nIter, setups.noiseLevel);
     cudaMemcpy(fftresult->data, cuda_fftresult, sz, cudaMemcpyDeviceToHost);
-    cudaMemcpy(targetfft->data, cuda_targetfft, sz, cudaMemcpyDeviceToHost);
     cudaMemcpy(gkp1->data, cuda_gkp1, sz, cudaMemcpyDeviceToHost);
     cudaFree(cuda_gkp1);
     cudaFree(cuda_fftresult);
@@ -652,14 +673,8 @@ Mat* phaseRetrieve( experimentConfig &setups, Mat* targetfft, Mat* &gkp1, Mat *c
     cudaFree(cuda_objMod);
     cudaFree(cuda_spt);
 
-    convertFromComplexToInteger( gkp1,cache, MOD2,0);
-    imwrite("recon_intensity.png",*cache);
-    convertFromComplexToInteger(gkp1, cache, PHASE,0);
-    imwrite("recon_phase.png",*cache);
     if(useDM)  convertFromComplexToInteger( pmpsg, cache, MOD2,1);
     if(useDM)  imwrite("recon_pmpsg.png",*cache);
-    convertFromComplexToInteger( fftresult, cache, MOD2,1);
-    imwrite("recon_pattern.png",*cache);
     return fftresult;
 }
 
@@ -895,7 +910,7 @@ int main(int argc, char** argv )
     //setups.spt = &re;
     //setups.spt = &cir3;
     setups.beamStop = &beamStop;//&cir;
-    setups.d = setups.oversampling*setups.pixelsize*setups.beamspotsize/setups.lambda; //distance to guarentee setups.oversampling
+    if(setups.runSim) setups.d = setups.oversampling*setups.pixelsize*setups.beamspotsize/setups.lambda; //distance to guarentee setups.oversampling
     Real k = pow(setups.pixelsize,2)*row/setups.lambda/setups.d; //calculate the proper distance for KCDI
     //setupsKCDI.d = k*setups.d/(k-1);
     //setups.pixelsize = 7;//setups.d/setups.oversampling/setups.beamspotsize*setups.lambda;
@@ -938,7 +953,7 @@ int main(int argc, char** argv )
         if(cache1->depth() == CV_32F || cache1->depth() == CV_64F) 
           gkp1 = cache1;
         else
-	  gkp1 = convertFromIntegerToComplex(*cache, gkp1,0,"waveFront");
+	  gkp1 = convertFromIntegerToComplex(*cache1, gkp1,0,"waveFront");
       }
       if(setups.doKCDI) {
         KCDIsource = new Mat(row, column, float_cv_format(2));
@@ -1115,7 +1130,7 @@ int main(int argc, char** argv )
       imwrite("recon_intensity.png",*cache);
       convertFromComplexToInteger(gkp1, cache, PHASE,0);
       imwrite("recon_phase.png",*cache);
-      convertFromComplexToInteger( fftresult, cache, MOD2,1);
+      convertFromComplexToInteger( fftresult, cache, MOD2,1,1,"pattern",1);
       imwrite("recon_pattern.png",*cache);
       FileStorage fs(setups.common.restart.c_str(),FileStorage::WRITE);
       fs<<"data"<<*fftresult;
@@ -1198,9 +1213,11 @@ int main(int argc, char** argv )
 
       }else{
         Mat pattern = readImage(setups.KCDI.Pattern.c_str()); //reconstruction is better after integerization
-        Mat* amp = convertFromIntegerToComplex(pattern, 0, 0);
+        Mat* amp = 0;
+        if(pattern.depth() == CV_32F || pattern.depth() == CV_64F) amp = &pattern;
+        else amp = convertFromIntegerToComplex(pattern, 0, 0);
         cudaMemcpy(cuda_KCDIAmp, amp->data, sz, cudaMemcpyHostToDevice);
-        delete amp;
+        if(amp!=&pattern) delete amp;
       }
       //KCDI reconstruction needs:
       //  1. fftresult from previous phaseRetrieve

@@ -15,4 +15,13 @@ extern __device__ __constant__ int cuda_column;
 extern __device__ __constant__ int cuda_rcolor;
 extern __device__ __constant__ Real cuda_scale;
 extern __device__ __constant__ int cuda_totalIntensity;
+#define gpuErrchk(ans) { gpuAssert((ans), __FILE__, __LINE__); }
+inline void gpuAssert(cudaError_t code, const char *file, int line, bool abort=true)
+{
+   if (code != cudaSuccess)
+   {
+      fprintf(stderr,"GPUassert: %s %s %d\n", cudaGetErrorString(code), file, line);
+      if (abort) exit(code);
+   }
+}
 #endif
