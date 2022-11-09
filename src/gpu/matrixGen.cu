@@ -1,4 +1,5 @@
 #include <iostream>
+#include "cudaDefs.h"
 #include "matrixGen.h"
 #define gpuErrchk(ans) { gpuAssert((ans), __FILE__, __LINE__); }
 inline void gpuAssert(cudaError_t code, const char *file, int line, bool abort=true)
@@ -9,10 +10,6 @@ inline void gpuAssert(cudaError_t code, const char *file, int line, bool abort=t
       if (abort) exit(code);
    }
 }
-
-const dim3 threadsPerBlock(16,16);
-__device__ __constant__ int cuda_row;
-__device__ __constant__ int cuda_column;
 
 __global__ void calcElement(float* matrixEle, int shiftx, int shifty, int paddingx, int paddingy){
   int x = blockIdx.x * blockDim.x + threadIdx.x;

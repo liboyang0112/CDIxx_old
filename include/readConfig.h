@@ -58,6 +58,7 @@ public:
   Real d = 16e3;
   Real pixelsize = 26;
   Real beamspotsize = 200;
+  Real shrinkThreshold = 0.15;
   CDIfiles common;
   CDIfiles KCDI;
   readConfig(const char* configfile);

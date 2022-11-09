@@ -73,7 +73,6 @@ Mat readCXI (const char* filename, Mat **mask)
     for(int i = 0 ; i < image.total(); i++){
 	    auto &datai = ((complex<float>*)image.data)[i];
 	    datai-=noiseLevel;
-	    if(datai.real()<0) datai = 0.;
 	    datai *= noiseScale;
 	    ((char*)imageint.data)[i] = (int)(datai.real()/256);
 	    ((char*)imagelog.data)[i] = datai.real() > 1?(int)(log(datai.real())*16):0;

@@ -7,7 +7,7 @@ LOCAL_BIN=bin
 GCC=gcc-10
 CXX=g++-10 -g -D__CUDA__=1
 MPICXX=mpic++
-NVCC=nvcc -arch=compute_35 --compiler-bindir /usr/bin/g++-10 -g -rdc=true
+NVCC=nvcc -arch=compute_35# --compiler-bindir /usr/bin/g++-10 -g -rdc=true
 
 CPP_EXE_SRC=$(wildcard util/*.cpp)
 CPP_EXE_OBJ=$(patsubst util/%.cpp, ${LOCAL_OBJ}/%.o, ${CPP_EXE_SRC})
@@ -31,14 +31,14 @@ CPP_LIB=$(patsubst src/cpu/%.cc, ${LOCAL_LIB}/lib%.so,  ${CPP_LIB_SRC})
 
 CUDA_WRAP_LIB_SRC=$(wildcard src/gpu/*.cu)
 CUDA_WRAP_LIB_OBJ=$(patsubst src/gpu/%.cu, ${LOCAL_OBJ}/gpu/%_cu.o, ${CUDA_WRAP_LIB_SRC})
-CUDA_WRAP_LIB=${LOCAL_LIB}/libcudaWrap.so
+CUDA_WRAP_LIB=${LOCAL_LIB}/libcudaWrap.a
+#CUDA_WRAP_LIB=${LOCAL_LIB}/libcudaWrap.so
 
 LINK_FLAGS_EXT=$(shell pkg-config --libs opencv4 hdf5 tbb fftw3) -lfftw3_mpi -lcholmod -lfftw3_threads -lm -lpthread -lconfig++
 LINK_FLAGS_EXT_CU=$(shell pkg-config --libs opencv4 hdf5)
 #LINK_FLAGS+=$(patsubst ${LOCAL_LIB}/lib%.so, -l%, ${CPP_LIB})
-LINK_FLAGS_CUDA_WRAP=$(patsubst ${LOCAL_LIB}/lib%.so, -l%, ${CUDA_WRAP_LIB})
-LINK_FLAGS= -L${LOCAL_LIB} $(patsubst ${LOCAL_LIB}/lib%.so, -l%, ${COMMON_LIB} ${COMMON_C_LIB})
-LINK_FLAGS+=${LINK_FLAGS_CUDA_WRAP}
+LINK_FLAGS_CUDA_WRAP=$(patsubst ${LOCAL_LIB}/lib%.a, -l%, ${CUDA_WRAP_LIB})
+LINK_FLAGS= -L${LOCAL_LIB} ${LINK_FLAGS_CUDA_WRAP} $(patsubst ${LOCAL_LIB}/lib%.so, -l%, ${COMMON_LIB} ${COMMON_C_LIB})
 INCLUDE_FLAGS=-I${LOCAL_INCLUDE} $(shell pkg-config --cflags opencv4 hdf5 mpi) -I/usr/include/suitesparse
 
 all: print
@@ -63,19 +63,19 @@ commonlibs: ${COMMON_C_LIB} ${COMMON_LIB}
 objs: ${COMMON_LIB_OBJ} ${CUDA_WRAP_LIB_OBJ} ${CPP_EXE_OBJ} ${COMMON_C_LIB_OBJ} ${CUDA_EXE_OBJ}
 
 
-${LOCAL_BIN}/cdi_run: ${LOCAL_OBJ}/cdi.o ${COMMON_LIB} ${CUDA_WRAP_LIB}
-	${MPICXX} $< -o $@ ${LINK_FLAGS_EXT} ${LINK_FLAGS} ${CUDA_LIB}
-${LOCAL_BIN}/test_run: ${LOCAL_OBJ}/test.o ${COMMON_LIB} ${CUDA_WRAP_LIB}
-	${MPICXX} $< -o $@ ${LINK_FLAGS_EXT} ${LINK_FLAGS} ${CUDA_LIB}
+${LOCAL_BIN}/cdi_run: ${LOCAL_OBJ}/cdi.o ${LOCAL_OBJ}/gpu/cudaWraplink.o
+	${MPICXX} $^ -o $@ ${LINK_FLAGS} ${LINK_FLAGS_EXT} ${CUDA_LIB}
+${LOCAL_BIN}/test_run: ${LOCAL_OBJ}/test.o ${LOCAL_OBJ}/gpu/cudaWraplink.o
+	${MPICXX} $^ -o $@ ${LINK_FLAGS} ${LINK_FLAGS_EXT} ${CUDA_LIB}
 
 
-${LOCAL_BIN}/%_run: ${LOCAL_OBJ}/%.o ${COMMON_LIB} ${CUDA_WRAP_LIB}
-	${CXX} $< -o $@  ${LINK_FLAGS_EXT} ${LINK_FLAGS} ${CUDA_LIB}
+${LOCAL_BIN}/%_run: ${LOCAL_OBJ}/%.o ${LOCAL_OBJ}/gpu/cudaWraplink.o
+	${CXX} $^ -o $@  ${LINK_FLAGS} ${LINK_FLAGS_EXT} ${CUDA_LIB}
 
 ${LOCAL_BIN}/%_cu: ${LOCAL_OBJ}/%_cu.o ${LOCAL_OBJ}/%link_cu.o
-	${CXX} $^ -o $@ ${LINK_FLAGS_EXT_CU} ${LINK_FLAGS} ${CUDA_LIB}
+	${CXX} $^ -o $@ ${LINK_FLAGS} ${LINK_FLAGS_EXT_CU} ${CUDA_LIB}
 
-${LOCAL_LIB}/lib%.so: ${LOCAL_OBJ}/%.o ${LOCAL_LIB}/libreadCXI.so
+${LOCAL_LIB}/lib%.so: ${LOCAL_OBJ}/%.o
 	${CXX} -shared $< -o $@ ${LINK_FLAGS_EXT} -L${LOCAL_LIB} -lreadCXI
 
 ${LOCAL_LIB}/libreadCXI.so: ${LOCAL_OBJ}/readCXI.o
@@ -88,10 +88,10 @@ ${LOCAL_OBJ}/%.o: util/%.cpp
 	${CXX} -c $< ${INCLUDE_FLAGS} -o $@
 
 ${LOCAL_OBJ}/%_cu.o: util/%.cu
-	${NVCC} -c $< $(patsubst -pthread%, %, ${INCLUDE_FLAGS}) -o $@
+	${NVCC} -rdc=true -c $< $(patsubst -pthread%, %, ${INCLUDE_FLAGS}) -o $@
 
-${LOCAL_OBJ}/%link_cu.o: ${LOCAL_OBJ}/%_cu.o
-	${NVCC} -dlink $< -o $@
+${LOCAL_OBJ}/%link_cu.o: ${LOCAL_OBJ}/%_cu.o ${CUDA_WRAP_LIB_OBJ}
+	${NVCC} -dlink $^ -o $@
 
 ${LOCAL_OBJ}/%.o: util/%.cpp
 	${CXX} -c $< ${INCLUDE_FLAGS} -o $@
@@ -100,12 +100,17 @@ ${LOCAL_OBJ}/%.o: src/common/%.cc
 	${CXX} -c -fPIC $< ${INCLUDE_FLAGS} -o $@
 
 ${LOCAL_LIB}/libcudaWrap.so: ${CUDA_WRAP_LIB_OBJ} ${LOCAL_OBJ}/gpu/cudaWraplink.o
-	g++  -shared -o $@ $^ -L${LOCAL_LIB} -lsparse -lformat ${CUDA_LIB} ${LINK_FLAGS_EXT}
+	${CXX}  -shared -o $@ $^ -L${LOCAL_LIB} -lsparse -lformat ${CUDA_LIB} ${LINK_FLAGS_EXT}
+
+${LOCAL_LIB}/libcudaWrap.a: ${CUDA_WRAP_LIB_OBJ}# ${LOCAL_OBJ}/gpu/cudaWraplink.o
+	ar cr $@ $^
 
 ${LOCAL_OBJ}/gpu/%_cu.o: src/gpu/%.cu
-	${NVCC} -Xcompiler '-fPIC' -c $< -o $@ $(patsubst -pthread%, %, ${INCLUDE_FLAGS})
+	#${NVCC} -rdc=true -Xcompiler '-fPIC' -c $< -o $@ $(patsubst -pthread%, %, ${INCLUDE_FLAGS})
+	${NVCC} -rdc=true -c $< -o $@ $(patsubst -pthread%, %, ${INCLUDE_FLAGS})
 
 ${LOCAL_OBJ}/gpu/cudaWraplink.o: ${CUDA_WRAP_LIB_OBJ}
-	${NVCC} -Xcompiler '-fPIC' -dlink $^ -o $@
+	#${NVCC} -Xcompiler '-fPIC' -dlink $^ -o $@
+	${NVCC} -dlink $^ -o $@
 clean:
 	rm -r lib/* obj/* bin/*

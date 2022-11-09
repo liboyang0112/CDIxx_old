@@ -12,6 +12,7 @@ Mat* convertFromComplexToInteger(Mat *fftwImage, Mat* opencvImage = 0, mode m = 
   int column = fftwImage->cols;
   if(!opencvImage) opencvImage = new Mat(row,column,format_cv);
   Real tot = 0;
+  int tot1 = 0;
   Real max = 0;
   for(int x = 0; x < row ; x++){
     int targetx = x;
@@ -39,13 +40,15 @@ Mat* convertFromComplexToInteger(Mat *fftwImage, Mat* opencvImage = 0, mode m = 
       int targety = y;
       if(isFrequency) targety = y<column/2?y+column/2:(y-column/2);
       rowo[targety] = floor(target);
+      tot1+=rowo[targety];
       //if(opencv_reverted) rowp[targety] = rcolor - 1 - rowp[targety];
       //rowp[targety] = rcolor - 1 - rowp[targety];
     }
   }
-  printf("total intensity %s: %4.2e, max: %f\n", label, tot/row/column, max);
+  printf("total intensity %s: raw average %4.2e, image average: %d, max: %f\n", label, tot/row/column, tot1/row/column, max);
   return opencvImage;
 }
 
 Mat* convertFromIntegerToComplex(Mat &image, Mat* cache = 0, bool isFrequency = 0, const char* label= "default");
+Mat* convertFromIntegerToReal(Mat &image, Mat* cache = 0, bool isFrequency = 0, const char* label= "default");
 Mat* convertFromIntegerToComplex(Mat &image,Mat &phase,Mat* cache = 0);

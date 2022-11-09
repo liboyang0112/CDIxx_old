@@ -1,20 +1,16 @@
 #ifndef __CUDACONFIG_H__
 #define __CUDACONFIG_H__
+#include <iostream>
 #include <cufft.h>
 #include "format.h"
-const dim3 threadsPerBlock(16,16);
+#include "cudaDefs.h"
 static const decltype(CUFFT_Z2Z) FFTformat=CUFFT_C2C;
 template<typename... Args>
 auto myCufftExec(Args... arg){
 	return cufftExecC2C(arg...);
 }
-using complexFormat=cufftComplex;
-extern __device__ __constant__ Real cuda_beta_HIO;
-extern __device__ __constant__ int cuda_row;
-extern __device__ __constant__ int cuda_column;
-extern __device__ __constant__ int cuda_rcolor;
-extern __device__ __constant__ Real cuda_scale;
-extern __device__ __constant__ int cuda_totalIntensity;
+void init_cuda_image(int rows, int cols, int rcolor=65536, Real scale=1);
+__global__ void applyNorm(complexFormat* data, double factor);
 #define gpuErrchk(ans) { gpuAssert((ans), __FILE__, __LINE__); }
 inline void gpuAssert(cudaError_t code, const char *file, int line, bool abort=true)
 {

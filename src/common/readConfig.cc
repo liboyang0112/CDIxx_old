@@ -74,6 +74,7 @@ readConfig::readConfig(const char* configfile){
     Job.lookupValue("oversampling",oversampling);
     Job.lookupValue("saveIter",saveIter);
     Job.lookupValue("exposure",exposure);
+    Job.lookupValue("shrinkThreshold",shrinkThreshold);
     Job.lookupValue("exposureKCDI",exposureKCDI);
     Job.lookupValue("lambda",lambda);
     Job.lookupValue("d",d);

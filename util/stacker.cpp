@@ -90,19 +90,15 @@ int main(int argc, char** argv )
 	rowf =   imagefloat.ptr<Real>(x/mergeDepth);
         for(int y = 0; y<column; y++){
 	    Real intensity = rowp[y];
-	    if(intensity >= rcolor-1){
+	    if(intensity >= rcolor-1 && imagein.size()!=1){
               Real ratio = ratios[0];
               for(int i = 1;i < imagein.size(); i++){
                 intensity = imagein[i].ptr<pixeltype>(x)[y];
-                if(intensity<rcolor-1){
-                  intensity = ratio*(imagein[i].ptr<pixeltype>(x)[y]-rowb[y]);
+                if(intensity<rcolor-1 || i == imagein.size()-1){
+                  intensity = ratio*(intensity-rowb[y]); //to avoid negative value of type uint16_t
                   break;
 		}
-                else if(i != imagein.size()-1)
-                  ratio*=ratios[i];
-		else{
-                  intensity = ratio*(imagein[i].ptr<pixeltype>(x)[y]);
-		}
+                ratio*=ratios[i];
 	      }
 	    }else
               intensity-=rowb[y];
