@@ -25,45 +25,24 @@ int main( int argc, char** argv ) {
    string output_file_gpu = image_name+"_gpu.png";
 
    // Read input image 
-   cv::Mat srcImage = readImage(input_file.c_str());
-   Mat* floatImage;
-   if(srcImage.depth()!=CV_32F) floatImage = convertFromIntegerToReal(srcImage);
-   else {
-     srcImage = imread( input_file, IMREAD_UNCHANGED  );
-     floatImage = &srcImage;
-     //auto f = [&](int x, int y, Real &data1, fftw_format &data2){
-     //  data1 = data2.real();
-     //};
-     //imageLoop<decltype(f), Real, fftw_format>(floatImage, &srcImage, &f);
-   }
-   if(srcImage.empty())
-   {
-      std::cout<<"Image Not Found: "<< input_file << std::endl;
-      return -1;
-   }
-   cout <<"\ninput image size: "<<srcImage.cols<<" "<<srcImage.rows<<" "<<srcImage.channels()<<"\n";
+   int row, col;
+   Real* image = readImage(input_file.c_str(), row, col);
+   cout <<"\ninput image size: "<<col<<" "<<row<<" "<< 1 <<"\n";
+   init_cuda_image(row,col,rcolor);
+	 inittvFilter(row, col);
+   tvFilter(image, 25, 100);
 
-   // convert RGB to gray scale
-   //cv::cvtColor(srcImage, srcImage, COLOR_BGR2GRAY);
-  
-   // Declare the output image  
-   cv::Mat dstImage_gpu (floatImage->size(), floatImage->type());
-   // run total variation filter on GPU  
-   tvFilter(*floatImage, dstImage_gpu);
+   Mat *imagem = new Mat(row, col, float_cv_format(1));
+   Real *tmp = (Real*)imagem->data;
+   imagem->data = (uchar*)image;
+
+   
    // normalization to 0-255
-   Mat* output = convertFromComplexToInteger<Real>(&dstImage_gpu, 0, MOD);
+   Mat* output = convertFromRealToInteger(imagem, 0, MOD);
+   imagem->data = (uchar*)tmp;
+   delete image;
+   delete imagem;
    imwrite(output_file_gpu, *output);
-
-
-   // Declare the output image  
-   //cv::Mat dstImage_cpu (srcImage.size(), srcImage.type());
-   //// run total variation filter on CPU  
-   //tvFilter_CPU(srcImage, dstImage_cpu);
-   //// normalization to 0-255
-   //dstImage_cpu.convertTo(dstImage_cpu, CV_32F, 1.0 / 255, 0);
-   //dstImage_cpu*=255;
-   //// Output image
-   //imwrite(output_file_cpu, dstImage_cpu);
       
    return 0;
 }

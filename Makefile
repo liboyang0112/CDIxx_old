@@ -29,8 +29,8 @@ CPP_LIB_SRC=$(wildcard src/cpu/*.cc)
 CPP_LIB_OBJ=$(patsubst src/cpu/%.cc, ${LOCAL_OBJ}/%.o, ${CPP_LIB_SRC})
 CPP_LIB=$(patsubst src/cpu/%.cc, ${LOCAL_LIB}/lib%.so,  ${CPP_LIB_SRC})
 
-CUDA_WRAP_LIB_SRC=$(wildcard src/gpu/*.cu)
-CUDA_WRAP_LIB_OBJ=$(patsubst src/gpu/%.cu, ${LOCAL_OBJ}/gpu/%_cu.o, ${CUDA_WRAP_LIB_SRC})
+CUDA_WRAP_LIB_SRC=$(wildcard src/gpu/*)
+CUDA_WRAP_LIB_OBJ=$(patsubst src/gpu/%cc, ${LOCAL_OBJ}/gpu/%o, $(patsubst src/gpu/%.cu, ${LOCAL_OBJ}/gpu/%_cu.o, ${CUDA_WRAP_LIB_SRC}))
 CUDA_WRAP_LIB=${LOCAL_LIB}/libcudaWrap.a
 #CUDA_WRAP_LIB=${LOCAL_LIB}/libcudaWrap.so
 
@@ -49,6 +49,7 @@ all: print
 
 print:
 	@echo CUDA: ${CUDA_DIR}
+	@echo objs: ${COMMON_LIB_OBJ} ${CUDA_WRAP_LIB_OBJ} ${CPP_EXE_OBJ} ${COMMON_C_LIB_OBJ} ${CUDA_EXE_OBJ}
 	@echo exes: ${CPP_EXE_RUN} ${CUDA_EXE_RUN}
 	@echo libs: ${COMMON_LIB} 
 	@echo cuda_libs: ${CUDA_WRAP_LIB} 
@@ -108,6 +109,10 @@ ${LOCAL_LIB}/libcudaWrap.a: ${CUDA_WRAP_LIB_OBJ}# ${LOCAL_OBJ}/gpu/cudaWraplink.
 ${LOCAL_OBJ}/gpu/%_cu.o: src/gpu/%.cu
 	#${NVCC} -rdc=true -Xcompiler '-fPIC' -c $< -o $@ $(patsubst -pthread%, %, ${INCLUDE_FLAGS})
 	${NVCC} -rdc=true -c $< -o $@ $(patsubst -pthread%, %, ${INCLUDE_FLAGS})
+
+${LOCAL_OBJ}/gpu/%.o: src/gpu/%.cc
+	#${NVCC} -rdc=true -Xcompiler '-fPIC' -c $< -o $@ $(patsubst -pthread%, %, ${INCLUDE_FLAGS})
+	${CXX} -c $< -o $@ $(patsubst -pthread%, %, ${INCLUDE_FLAGS})
 
 ${LOCAL_OBJ}/gpu/cudaWraplink.o: ${CUDA_WRAP_LIB_OBJ}
 	#${NVCC} -Xcompiler '-fPIC' -dlink $^ -o $@

@@ -20,12 +20,11 @@ int main(int argc, char** argv){
 	freqDom = (fftw_format*)malloc(Npoints*sizeof(fftw_format));
 	timeDom = (fftw_format*)malloc(Npoints*sizeof(fftw_format));
 	*/
-	Mat input = readImage(argv[1]);
+	int row, col;
+	Real* inputdata = readImage(argv[1], row, col);
+	Mat input(row,col,float_cv_format(1));
 	int os = 2;
-	Mat *img = extend(input,os);
-	Mat *imgf = convertFromIntegerToComplex(*img);
-	Mat *inputimg = convertFromComplexToInteger(imgf, 0, MOD2, 0, 1, "input", 0);
-	imwrite("mergedinput.png",*inputimg);
+	Mat *imgf = extend(input,os);
 	Real m = 2;
 	Real dphaselambda = 10*pi;  // simulate lambda ~ lambda/m
 	int ntime = 30;

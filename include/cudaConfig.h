@@ -9,8 +9,8 @@ template<typename... Args>
 auto myCufftExec(Args... arg){
 	return cufftExecC2C(arg...);
 }
-void init_cuda_image(int rows, int cols, int rcolor=65536, Real scale=1);
 __global__ void applyNorm(complexFormat* data, double factor);
+__global__ void applyConvolution(Real *input, Real *output, Real* kernel, int kernelwidth, int kernelheight);
 #define gpuErrchk(ans) { gpuAssert((ans), __FILE__, __LINE__); }
 inline void gpuAssert(cudaError_t code, const char *file, int line, bool abort=true)
 {

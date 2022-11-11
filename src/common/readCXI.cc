@@ -1,6 +1,7 @@
- 
+#include "opencv2/opencv.hpp" 
 #include "hdf5.h"
 #include "common.h"
+using namespace cv;
 
 
 #define RANK         2
