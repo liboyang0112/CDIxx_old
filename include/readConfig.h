@@ -13,10 +13,12 @@
 #include <iomanip>
 #include <cstdlib>
 #include <libconfig.h++>
+#include <vector>
 #include "format.h"
 
 // This example reads the configuration file 'example.cfg' and displays
 // some of its contents.
+enum Algorithm {RAAR, ER, HIO};
 
 struct CDIfiles{
   std::string Pattern;
@@ -59,10 +61,24 @@ public:
   Real pixelsize = 26;
   Real beamspotsize = 200;
   Real shrinkThreshold = 0.15;
+  std::string algorithm = "200*RAAR";
   CDIfiles common;
   CDIfiles KCDI;
   readConfig(const char* configfile);
   void print();
   ~readConfig(){};
+};
+
+class AlgoParser{
+public:
+  std::vector<AlgoParser*> subParsers;
+  std::vector<int> count;
+  std::vector<int> algoList;
+  int nAlgo = 3;
+  int currentAlgo;
+  int currentCount;
+  AlgoParser(std::string formula);
+  void restart();
+  int next();
 };
 #endif

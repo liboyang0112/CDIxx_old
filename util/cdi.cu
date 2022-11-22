@@ -18,6 +18,7 @@
 
 #include <cub/device/device_reduce.cuh>
 #include <curand_kernel.h>
+
 struct CustomMax
 {
   __device__ __forceinline__
@@ -245,7 +246,11 @@ __global__ void takeMod2Diff(complexFormat* a, Real* b, Real *output, Real *bs){
   int y = blockIdx.y * blockDim.y + threadIdx.y;
   if(x >= cuda_row || y >= cuda_column) return;
   int index = x*cuda_column + y;
-  output[index] = ((bs&&bs[index]>cuda_threshold)|| b[index]>0.95)?0:(b[index]-pow(a[index].x,2)-pow(a[index].y,2));
+  Real mod2 = pow(a[index].x,2)+pow(a[index].y,2);
+  Real tmp = b[index]-mod2;
+  if(bs&&bs[index]>0.5) tmp=0;
+  else if(b[index]>0.99) tmp = 0.99-mod2;
+  output[index] = tmp;
 }
 
 __global__ void takeMod2Sum(complexFormat* a, Real* b){
@@ -301,7 +306,7 @@ __global__ void applyMod(complexFormat* source, Real* target, Real *bs = 0, bool
   int index = x*cuda_column + y;
   Real mod2 = target[index];
   if(mod2<0) mod2=0;
-  if(loose && bs && bs[index]>cuda_threshold) {
+  if(loose && bs && bs[index]>0.5) {
     if(iter > 500) return;
     else mod2 = maximum+1;
   }
@@ -343,7 +348,7 @@ __global__ void createWaveFront(Real* d_intensity, Real* d_phase, complexFormat*
   }
   int targetindex = (x-marginx)*cuda_column/oversampling + y-marginy;
   Real mod = sqrtf(max(0.,d_intensity[targetindex]));
-  Real phase = d_phase? d_phase[targetindex] : 0;
+  Real phase = d_phase? (d_phase[targetindex]-0.5) : 0;
   objectWave[index].x = mod*cos(phase);
   objectWave[index].y = mod*sin(phase);
 }
@@ -482,12 +487,16 @@ class experimentConfig : public readConfig{
       multiplyFresnelPhase_Device<<<numBlocks,threadsPerBlock>>>(amp, fresfactor);
     }
     void allocateMem(){
-      cudaMalloc((void**)&support, row*column*sizeof(Real)); //preallocation of support and beamstop
-      cudaMalloc((void**)&beamstop, row*column*sizeof(Real));
-      cudaMalloc((void**)&objectWave, row*column*sizeof(complexFormat));
-      cudaMalloc((void**)&patternWave, row*column*sizeof(complexFormat));
-      cudaMalloc((void**)&patternData, row*column*sizeof(Real));
+      printf("allocating memory\n");
+      int sz = row*column*sizeof(Real);
+      cudaMalloc((void**)&support, sz); //preallocation of support and beamstop
+      cudaMalloc((void**)&beamstop, sz);
+      cudaMalloc((void**)&objectWave, sz*2);
+      cudaMalloc((void**)&patternWave, sz*2);
+      cudaMalloc((void**)&patternData, sz);
+      printf("initializing cuda image\n");
       init_cuda_image(row,column,rcolor);
+      printf("initializing cuda plotter\n");
       plt.init(row,column);
     }
     void readObjectWave(){
@@ -498,11 +507,14 @@ class experimentConfig : public readConfig{
       allocateMem();
       Real* d_intensity = support; //use the memory allocated;
       cudaMemcpy(d_intensity, intensity, sz, cudaMemcpyHostToDevice);
+      free(intensity);
       Real* d_phase = 0;
       if(phaseModulation) {
-        Real* phase = readImage(common.Intensity.c_str(), row, column);
+          int tmp;
+        Real* phase = readImage(common.Phase.c_str(), tmp,tmp);
         d_phase = beamstop;
-        cudaMemcpy(d_phase, phase, sz, cudaMemcpyHostToDevice);
+        gpuErrchk(cudaMemcpy(beamstop, phase, sz, cudaMemcpyHostToDevice));
+	free(phase);
       }
       createWaveFront<<<numBlocks,threadsPerBlock>>>(d_intensity, d_phase, objectWave, oversampling);
       if(isFresnel) multiplyFresnelPhase(objectWave, d);
@@ -549,12 +561,16 @@ class experimentConfig : public readConfig{
       Real* pattern = readImage(common.Pattern.c_str(), row, column);
       allocateMem();
       cudaMemcpy(patternData, pattern, row*column*sizeof(Real), cudaMemcpyHostToDevice);
+      free(pattern);
       cudaConvertFO<<<numBlocks,threadsPerBlock>>>(patternData);
+      printf("Created pattern data\n");
     }
     void init(){
       if(runSim) {
+	printf("running simulation, reading input images\n");
         readObjectWave();
       }else{
+	printf("running reconstruction, reading input pattern\n");
         readPattern();
       }
       C_circle cir;
@@ -584,11 +600,15 @@ class experimentConfig : public readConfig{
         inverseFactorMid = 1./row/column/forwardFactorMid;
       }
       curandStateMRG32k3a *devstates;
-      cudaMalloc((void **)&devstates, column * row * sizeof(curandStateMRG32k3a));
+      gpuErrchk(cudaMalloc((void **)&devstates, column * row * sizeof(curandStateMRG32k3a)));
+      inittvFilter(row,column);
       if(runSim){
+	printf("Generating diffraction pattern\n");
         propagate(objectWave, patternWave, 1);
         getMod2<<<numBlocks,threadsPerBlock>>>(patternData, patternWave);
         if(simCCDbit){
+	  printf("Applying Poisson noise\n");
+          plt.plotFloat(patternData, MOD, 1, 1, "theory_pattern", 1);
           applyPoissonNoise<<<numBlocks,threadsPerBlock>>>(patternData, noiseLevel, devstates);
         }
       }
@@ -599,10 +619,10 @@ class experimentConfig : public readConfig{
       }else {
         if(!runSim) createWaveFront<<<numBlocks,threadsPerBlock>>>(patternData, 0, patternWave, 1);
         applyRandomPhase<<<numBlocks,threadsPerBlock>>>(patternWave, useBS?beamstop:0, devstates);
-        plt.plotComplex(patternWave, MOD2, 1, 1, "init_logpattern", 1);
-        plt.plotComplex(patternWave, MOD2, 1, 1, "init_pattern", 0);
+        plt.plotFloat(patternData, MOD, 1, 1, "init_logpattern", 1);
+        plt.plotFloat(patternData, MOD, 1, 1, "init_pattern", 0);
       }
-      cudaFree(devstates);
+      gpuErrchk(cudaFree(devstates));
       rect re;
       re.startx = (oversampling-1)/2*row/oversampling-1;
       re.starty = (oversampling-1)/2*column/oversampling-1;
@@ -616,7 +636,7 @@ class experimentConfig : public readConfig{
     }
 };
 
-__global__ void applySupport(complexFormat *gkp1, complexFormat *gkprime, Real* objMod, Real *spt, int iter = 0, Real fresnelFactor = 0){
+__global__ void applySupport(complexFormat *gkp1, complexFormat *gkprime, Algorithm algo, Real *spt, int iter = 0, Real fresnelFactor = 0){
 
   int x = blockIdx.x * blockDim.x + threadIdx.x;
   int y = blockIdx.y * blockDim.y + threadIdx.y;
@@ -626,9 +646,10 @@ __global__ void applySupport(complexFormat *gkp1, complexFormat *gkprime, Real* 
   bool inside = spt[index] > cuda_threshold;
   complexFormat &gkp1data = gkp1[index];
   complexFormat &gkprimedata = gkprime[index];
-  if(iter < 300) ApplyRAARSupport(inside,gkp1data,gkprimedata,cuda_beta_HIO);
-  else ApplyERSupport(inside,gkp1data,gkprimedata);
-  if(fresnelFactor*(cuda_row*cuda_row+cuda_column*cuda_column)>1 && iter < 100) {
+  if(algo==RAAR) ApplyRAARSupport(inside,gkp1data,gkprimedata,cuda_beta_HIO);
+  else if(algo==ER) ApplyERSupport(inside,gkp1data,gkprimedata);
+  else if(algo==HIO) ApplyHIOSupport(inside,gkp1data,gkprimedata,cuda_beta_HIO);
+  if(fresnelFactor && iter < 100) {
     if(inside){
       Real phase = M_PI*fresnelFactor*(pow(x-(cuda_row>>1),2)+pow(y-(cuda_column>>1),2));
       //Real mod = cuCabs(gkp1data);
@@ -637,8 +658,8 @@ __global__ void applySupport(complexFormat *gkp1, complexFormat *gkprime, Real* 
       gkp1data.y=mod*sin(phase);
     }
   }
-  objMod[index] = cuCabsf(gkp1data);
 }
+
 complexFormat* phaseRetrieve(experimentConfig &setups){
   int row = setups.row;
   int column = setups.column;
@@ -648,7 +669,7 @@ complexFormat* phaseRetrieve(experimentConfig &setups){
   Real beta = -1;
   Real gammas = -1./beta;
   Real gammam = 1./beta;
-  Real gaussianSigma = 2;
+  Real gaussianSigma = 2.5;
 
   size_t sz = row*column*sizeof(complexFormat);
   complexFormat *cuda_gkprime;
@@ -663,8 +684,10 @@ complexFormat* phaseRetrieve(experimentConfig &setups){
   cudaMalloc((void**)&cuda_objMod, sz/2);
   cudaMemcpy(cuda_diff, cuda_targetfft, sz/2, cudaMemcpyDeviceToDevice);
 
-  inittvFilter(row,column);
+  AlgoParser algo(setups.algorithm);
   for(int iter = 0; iter < setups.nIter; iter++){
+    int ialgo = algo.next();
+    if(ialgo<0) break;
     //start iteration
     if(iter%100==0) {
       std::string iterstr = to_string(iter);
@@ -673,21 +696,33 @@ complexFormat* phaseRetrieve(experimentConfig &setups){
         setups.plt.plotComplex(cuda_gkp1, PHASE, 0, 1, ("recon_phase"+iterstr).c_str(), 0);
         setups.plt.plotComplex(cuda_fftresult, MOD2, 1, 1, ("recon_pattern"+iterstr).c_str(), 1);
       }
-      if(iter>0){
+      /*
+      if(iter>0){  //Do Total variation denoising during the reconstruction, not quite effective tho.
         takeMod2Diff<<<numBlocks,threadsPerBlock>>>(cuda_fftresult,cuda_targetfft, cuda_diff, useBS? cir:0);
         cudaConvertFO<<<numBlocks,threadsPerBlock>>>(cuda_diff);
-        tvFilterWrap(cuda_diff, setups.noiseLevel, 100);
-        setups.plt.plotFloat(cuda_diff, MOD, 0, 1, ("smoothed"+iterstr).c_str(), 1);
+        tvFilterWrap(cuda_diff, setups.noiseLevel, 200);
         cudaConvertFO<<<numBlocks,threadsPerBlock>>>(cuda_diff);
+        setups.plt.plotFloat(cuda_diff, MOD, 1, 1, ("smootheddiff"+iterstr).c_str(), 1);
         takeMod2Sum<<<numBlocks,threadsPerBlock>>>(cuda_fftresult, cuda_diff);
+        setups.plt.plotFloat(cuda_diff, MOD, 1, 1, ("smoothed"+iterstr).c_str(), 1);
       }
+      */
     }
     applyMod<<<numBlocks,threadsPerBlock>>>(cuda_fftresult,cuda_diff, useBS? cir:0, !setups.reconAC || iter > 1000,iter, setups.noiseLevel);
     setups.propagate(cuda_fftresult, cuda_gkprime, 0);
-    applySupport<<<numBlocks,threadsPerBlock>>>(cuda_gkp1, cuda_gkprime, cuda_objMod,setups.support,iter,setups.isFresnel? setups.fresnelFactor:0);
+    applySupport<<<numBlocks,threadsPerBlock>>>(cuda_gkp1, cuda_gkprime, (Algorithm)ialgo, setups.support, iter, setups.isFresnel? setups.fresnelFactor:0);
+    /*
+    if(iter%20==19){
+      if(iter%100==99){
+          tvFilterWrap(cuda_objMod, 2e8, 20);
+          applyMod<<<numBlocks,threadsPerBlock>>>(cuda_gkp1, cuda_objMod);
+      }
+    }
+    */
     setups.propagate( cuda_gkp1, cuda_fftresult, 1);
     //update mask
     if((iter > 0 && iter < 200) && iter%20==0 && useShrinkMap){
+      getMod<<<numBlocks,threadsPerBlock>>>(cuda_objMod,cuda_gkp1);
       int size = floor(gaussianSigma*6); // r=3 sigma to ensure the contribution outside kernel is negligible (0.01 of the maximum)
       size = size/2;
       int width = size*2+1;
@@ -743,7 +778,7 @@ __global__ void applyAutoCorrelationMod(complexFormat* source,complexFormat* tar
   Real sourcedata = source[index].x;
   Real tolerance = 0.5/cuda_rcolor*cuda_scale;
   Real diff = sourcedata-targetdata;
-  if(bs && bs[index]>cuda_threshold) {
+  if(bs && bs[index]>0.5) {
     if(targetdata<0) target[index].x = 0;
     return;
   }
@@ -796,6 +831,7 @@ __global__ void applyHIOACSupport(complexFormat* data,complexFormat* prime, sptT
 int main(int argc, char** argv )
 {
   experimentConfig setups(argv[1]);
+  cudaFree(0); // to speed up the cudaMalloc; https://forums.developer.nvidia.com/t/cudamalloc-slow/40238
   if(argc < 2){
     printf("please feed the object intensity and phase image\n");
   }

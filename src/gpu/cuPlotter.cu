@@ -1,5 +1,6 @@
 #include "cuPlotter.h"
 #include "cudaDefs.h"
+#include <cassert>
 
 void cuPlotter::initcuData(size_t sz){
   if(cuCache_data) cudaFree(cuCache_data);
@@ -15,8 +16,7 @@ __device__ Real cugetVal(mode m, complexFormat &data){
   if(m==MOD) return cuCabsf(data);
   if(m==MOD2) return data.x*data.x+data.y*data.y;
   if(m==PHASE){
-    if(cuCabsf(data)==0) return 0;
-    return atan(data.y/data.x);
+    return atan2(data.y,data.x)/2/M_PI+0.5;
   }
   return data.x;
 }
@@ -49,6 +49,7 @@ __global__ void process(void* cudaData, pixeltype* cache, mode m, bool isFrequen
   if(target>=cuda_rcolor) {
     target=cuda_rcolor-1;
   }
+  if(target!=target) printf("ERROR: target is NAN\n");
   cache[targetx*cuda_column+targety] = floor(target);
 }
 

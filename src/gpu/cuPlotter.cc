@@ -11,10 +11,12 @@ void cuPlotter::init(int rows_, int cols_){
 }
 void cuPlotter::plotComplex(void* cudaData, mode m, bool isFrequency, Real decay, const char* label,bool islog){
   cuPlotter::processComplexData(cudaData,m,isFrequency,decay,islog);
+  printf("written to file %s.png\n", label);
   imwrite(std::string(label)+".png", *(Mat*)cv_cache);
 }
 void cuPlotter::plotFloat(void* cudaData, mode m, bool isFrequency, Real decay, const char* label,bool islog){
   cuPlotter::processFloatData(cudaData,m,isFrequency,decay,islog);
+  printf("written to file %s.png\n", label);
   imwrite(std::string(label)+".png", *(Mat*)cv_cache);
 }
 cuPlotter::~cuPlotter(){

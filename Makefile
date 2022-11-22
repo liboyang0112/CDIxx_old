@@ -4,10 +4,10 @@ LOCAL_LIB=lib
 LOCAL_INCLUDE=include
 LOCAL_OBJ=obj
 LOCAL_BIN=bin
-GCC=gcc-10
+GCC=gcc-10 -Ofast
 CXX=g++-10 -g -D__CUDA__=1
 MPICXX=mpic++
-NVCC=nvcc -arch=compute_35# --compiler-bindir /usr/bin/g++-10 -g -rdc=true
+NVCC=nvcc -arch=sm_35 -Xptxas=-O3# --compiler-bindir /usr/bin/g++-10 -g -rdc=true
 
 CPP_EXE_SRC=$(wildcard util/*.cpp)
 CPP_EXE_OBJ=$(patsubst util/%.cpp, ${LOCAL_OBJ}/%.o, ${CPP_EXE_SRC})

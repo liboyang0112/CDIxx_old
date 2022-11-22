@@ -88,8 +88,9 @@ __global__ void calcBracketLambda(T *srcImage, T *bracket, T* u0, T* lambdacore,
   __syncthreads();
   if(x >= cuda_row || y >= cuda_column) return;
   int index = x*cuda_column+y;
-  float dt = 1e-7*noiseLevel;
-  float sigmafactor = cuda_rcolor*1e-7*cuda_rcolor/(cuda_row*cuda_column*2);
+  float sigma = sqrt(noiseLevel);
+  float dt = 5e-8*sigma;
+  float sigmafactor = cuda_rcolor*5e-8*cuda_rcolor/(cuda_row*cuda_column*2)/sigma;
   int centerIdx = (threadIdx.x+FILTER_WIDTH)*(tilewidth) + threadIdx.y+FILTER_HEIGHT;
   float dpxU = tile[centerIdx+tilewidth]-tile[centerIdx];
   float dpyU = tile[centerIdx+1]-tile[centerIdx];

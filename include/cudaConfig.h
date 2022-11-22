@@ -1,7 +1,6 @@
 #ifndef __CUDACONFIG_H__
 #define __CUDACONFIG_H__
 #include <iostream>
-#include <cufft.h>
 #include "format.h"
 #include "cudaDefs.h"
 static const decltype(CUFFT_Z2Z) FFTformat=CUFFT_C2C;
