@@ -55,16 +55,16 @@ readConfig::readConfig(const char* configfile){
   {
     libconfig::Setting &InputImages = root["InputImages"];
     libconfig::Setting &defaultImages= InputImages["default"];
-    libconfig::Setting &KCDIImages= InputImages["KCDI"];
+    libconfig::Setting &pupilImages= InputImages["pupil"];
 
     defaultImages.lookupValue("Intensity",common.Intensity);
     defaultImages.lookupValue("Phase",common.Phase);
     defaultImages.lookupValue("restart",common.restart);
     defaultImages.lookupValue("Pattern",common.Pattern);
-    KCDIImages.lookupValue("Intensity",KCDI.Intensity);
-    KCDIImages.lookupValue("Phase",KCDI.Phase);
-    KCDIImages.lookupValue("restart",KCDI.restart);
-    KCDIImages.lookupValue("Pattern",KCDI.Pattern);
+    pupilImages.lookupValue("Intensity",pupil.Intensity);
+    pupilImages.lookupValue("Phase",pupil.Phase);
+    pupilImages.lookupValue("restart",pupil.restart);
+    pupilImages.lookupValue("Pattern",pupil.Pattern);
   }
   catch(const SettingNotFoundException &nfex)
   {
@@ -76,10 +76,11 @@ readConfig::readConfig(const char* configfile){
   {
     libconfig::Setting &Job = root["Job"];
     Job.lookupValue("oversampling",oversampling);
+    Job.lookupValue("oversampling_spt",oversampling_spt);
     Job.lookupValue("saveIter",saveIter);
     Job.lookupValue("exposure",exposure);
     Job.lookupValue("shrinkThreshold",shrinkThreshold);
-    Job.lookupValue("exposureKCDI",exposureKCDI);
+    Job.lookupValue("exposurepupil",exposurepupil);
     Job.lookupValue("lambda",lambda);
     Job.lookupValue("d",d);
     Job.lookupValue("pixelsize",pixelsize);
@@ -94,15 +95,17 @@ readConfig::readConfig(const char* configfile){
     Job.lookupValue("useGaussionHERALDO",useGaussionHERALDO);
     Job.lookupValue("doCentral",doCentral);
     Job.lookupValue("useRectHERALDO",useRectHERALDO);
-    Job.lookupValue("doKCDI",doKCDI);
+    Job.lookupValue("dopupil",dopupil);
     Job.lookupValue("useDM",useDM);
     Job.lookupValue("useBS",useBS);
     Job.lookupValue("useShrinkMap",useShrinkMap);
     Job.lookupValue("reconAC",reconAC);
     Job.lookupValue("restart",restart);
-    Job.lookupValue("nIterKCDI",nIterKCDI);
+    Job.lookupValue("nIterpupil",nIterpupil);
     Job.lookupValue("noiseLevel",noiseLevel);
+    Job.lookupValue("noiseLevel_pupil",noiseLevel_pupil);
     Job.lookupValue("nIter",nIter);
+    Job.lookupValue("verbose",verbose);
     Job.lookupValue("algorithm",algorithm);
   }
   catch(const SettingNotFoundException &nfex)
@@ -115,10 +118,10 @@ void readConfig::print(){
   std::cout<<"common Phase="<<common.Phase<<std::endl;
   std::cout<<"common restart="<<common.restart<<std::endl;
   std::cout<<"common Pattern="<<common.Pattern<<std::endl;
-  std::cout<<"KCDI Intensity="<<KCDI.Intensity<<std::endl;
-  std::cout<<"KCDI Phase="<<KCDI.Phase<<std::endl;
-  std::cout<<"KCDI restart="<<KCDI.restart<<std::endl;
-  std::cout<<"KCDI Pattern="<<KCDI.Pattern<<std::endl;
+  std::cout<<"pupil Intensity="<<pupil.Intensity<<std::endl;
+  std::cout<<"pupil Phase="<<pupil.Phase<<std::endl;
+  std::cout<<"pupil restart="<<pupil.restart<<std::endl;
+  std::cout<<"pupil Pattern="<<pupil.Pattern<<std::endl;
   std::cout<<"oversampling="<<oversampling<<std::endl;
   std::cout<<"lambda="<<lambda<<std::endl;
   std::cout<<"d="<<d<<std::endl;
@@ -132,7 +135,7 @@ void readConfig::print(){
   std::cout<<"useGaussionHERALDO="<<useGaussionHERALDO<<std::endl;
   std::cout<<"doCentral="<<doCentral<<std::endl;
   std::cout<<"useRectHERALDO="<<useRectHERALDO<<std::endl;
-  std::cout<<"doKCDI="<<doKCDI<<std::endl;
+  std::cout<<"dopupil="<<dopupil<<std::endl;
   std::cout<<"useDM="<<useDM<<std::endl;
   std::cout<<"useBS="<<useBS<<std::endl;
   std::cout<<"useShrinkMap="<<useShrinkMap<<std::endl;

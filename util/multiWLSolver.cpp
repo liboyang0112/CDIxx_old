@@ -16,7 +16,7 @@ double gaussian(double x, double y, double sigma){
 }
 
 double gaussian_norm(double x, double y, double sigma){
-  return 1./(2*pi*sigma*sigma)*gaussian(x,y,sigma);
+  return 1./(2*M_PI*sigma*sigma)*gaussian(x,y,sigma);
 }
 
 double interpolate(double x, std::vector<double> &v){

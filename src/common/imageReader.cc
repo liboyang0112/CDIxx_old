@@ -69,8 +69,8 @@ Mat* convertFromIntegerToComplex(Mat &image,Mat &phase,Mat* cache){
     for(int y = 0; y<column; y++){
       tot += rowp[y];
       Real phase = rowp[y];
-      phase*=2*pi/rcolor;
-      phase-=pi;
+      phase*=2*M_PI/rcolor;
+      phase-=M_PI;
       phase*=0.2;
       rowo[y] = fftw_format(sqrt(((Real)rowi[y])/rcolor)*cos(phase),sqrt(((Real)rowi[y])/rcolor)*sin(phase));
     }
@@ -92,7 +92,7 @@ Real getVal(mode m, fftw_format &data){
       break;
     case PHASE:
       if(std::abs(data)==0) return 0;
-      return (std::arg(data)+pi)/2/pi;
+      return (std::arg(data)+M_PI)/2/M_PI;
       break;
     default:
       return data.real();

@@ -39,7 +39,7 @@ public:
   bool useGaussionHERALDO = 0;
   bool doCentral =0;
   bool useRectHERALDO = 0;
-  bool doKCDI = 0;
+  bool dopupil = 0;
   bool useDM=0;
   bool useBS=0;
   bool useShrinkMap = 0;
@@ -50,20 +50,23 @@ public:
 //integer configs
   int beamStopSize = 10;
   int nIter = 2000;
-  int nIterKCDI = 2000;
+  int nIterpupil = 2000;
   int noiseLevel = 0;
+  int noiseLevel_pupil = 0;
+  int verbose = 0;
 //float configs
   Real exposure = 0.1;
-  Real exposureKCDI = 0.1;
+  Real exposurepupil = 0.1;
   Real oversampling = 3;
+  Real oversampling_spt = 2;
   Real lambda = 0.01;
   Real d = 16e3;
   Real pixelsize = 26;
   Real beamspotsize = 200;
   Real shrinkThreshold = 0.15;
   std::string algorithm = "200*RAAR";
+  CDIfiles pupil;
   CDIfiles common;
-  CDIfiles KCDI;
   readConfig(const char* configfile);
   void print();
   ~readConfig(){};

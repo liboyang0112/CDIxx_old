@@ -2,6 +2,7 @@
 #define __CUDADEFS_H__
 #include "format.h"
 #include <cufft.h>
+#define cudaF(a) a<<<numBlocks,threadsPerBlock>>>
 using complexFormat=cufftComplex;
 extern const dim3 threadsPerBlock;
 extern dim3 numBlocks;
@@ -11,8 +12,7 @@ extern __device__ __constant__ int cuda_column;
 extern __device__ __constant__ int cuda_rcolor;
 extern __device__ __constant__ Real cuda_scale;
 extern __device__ __constant__ int cuda_totalIntensity;
-extern __device__ __constant__ Real cuda_norm;
 extern __device__ __constant__ Real cuda_threshold;
 extern complexFormat *cudaData;
-extern cufftHandle *plan; 
+extern cufftHandle *plan, *planR2C;
 #endif

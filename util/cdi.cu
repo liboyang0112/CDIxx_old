@@ -12,12 +12,11 @@
 #include "common.h"
 #include <ctime>
 #include "cudaConfig.h"
-#include "readConfig.h"
+#include "experimentConfig.h"
 #include "tvFilter.h"
 #include "cuPlotter.h"
 
 #include <cub/device/device_reduce.cuh>
-#include <curand_kernel.h>
 
 struct CustomMax
 {
@@ -56,70 +55,7 @@ Real gaussian(Real x, Real y, Real sigma){
 }
 
 Real gaussian_norm(Real x, Real y, Real sigma){
-  return 1./(2*pi*sigma*sigma)*gaussian(x,y,sigma);
-}
-
-class rect{
-  public:
-    int startx;
-    int starty;
-    int endx;
-    int endy;
-    __device__ __host__ bool isInside(int x, int y){
-      if(x > startx && x <= endx && y > starty && y <= endy) return true;
-      return false;
-    }
-};
-class C_circle{
-  public:
-    int x0;
-    int y0;
-    Real r;
-    __device__ __host__ bool isInside(int x, int y){
-      Real dr = sqrt(pow(x-x0,2)+pow(y-y0,2));
-      if(dr < r) return true;
-      return false;
-    }
-};
-
-template <typename sptType>
-__global__ void createMask(Real* data, sptType* spt, bool isFrequency=0){
-  int x = blockIdx.x * blockDim.x + threadIdx.x;
-  int y = blockIdx.y * blockDim.y + threadIdx.y;
-  if(x >= cuda_row || y >= cuda_column) return;
-  int index = x*cuda_column + y;
-  if(isFrequency){
-    if(x>=cuda_row/2) x-=cuda_row/2;
-    else x+=cuda_row/2;
-    if(y>=cuda_column/2) y-=cuda_column/2;
-    else y+=cuda_column/2;
-  }
-  data[index]=spt->isInside(x,y);
-}
-
-template <typename T>
-__global__ void cudaConvertFO(T* data){
-  int x = blockIdx.x * blockDim.x + threadIdx.x;
-  int y = blockIdx.y * blockDim.y + threadIdx.y;
-  if(x >= (cuda_row>>1) || y >= cuda_column) return;
-  int index = x*cuda_column + y;
-  int indexp = (x+(cuda_row>>1))*cuda_column + (y >= (cuda_column>>1)? y-(cuda_column>>1): (y+(cuda_column>>1)));
-  T tmp = data[index];
-  data[index]=data[indexp];
-  data[indexp]=tmp;
-}
-
-__global__ void applyNormConvertFO(complexFormat* data, Real factor){
-  int x = blockIdx.x * blockDim.x + threadIdx.x;
-  int y = blockIdx.y * blockDim.y + threadIdx.y;
-  if(x >= (cuda_row>>1) || y >= cuda_column) return;
-  int index = x*cuda_column + y;
-  int indexp = (x+(cuda_row>>1))*cuda_column + (y >= (cuda_column>>1)? y-(cuda_column>>1): (y+(cuda_column>>1)));
-  complexFormat tmp = data[index];
-  data[index].x=data[indexp].x*factor;
-  data[index].y=data[indexp].y*factor;
-  data[indexp].x=tmp.x*factor;
-  data[indexp].y=tmp.y*factor;
+  return 1./(2*M_PI*sigma*sigma)*gaussian(x,y,sigma);
 }
 
 __global__  void initESW(complexFormat* ESW, Real* mod, complexFormat* amp){
@@ -131,6 +67,11 @@ __global__  void initESW(complexFormat* ESW, Real* mod, complexFormat* amp){
   if(cuCabsf(tmp)<=1e-10) {
     ESW[index] = tmp;
     return;
+  }
+  if(mod[index]<=0) {
+	  ESW[index].x = -tmp.x;
+	  ESW[index].y = -tmp.y;
+	  return;
   }
   Real factor = sqrtf(mod[index])/cuCabsf(tmp)-1;
   ESW[index].x = factor*tmp.x;
@@ -144,10 +85,15 @@ __global__  void applyESWMod(complexFormat* ESW, Real* mod, complexFormat* amp, 
   int index = x*cuda_column + y;
   auto tmp = amp[index];
   auto sum = cuCaddf(ESW[index],tmp);
+  Real mod2 = mod[index];
+  if(mod2<=0){
+	  ESW[index].x = -tmp.x;
+	  ESW[index].y = -tmp.y;
+	  return;
+  }
   Real factor = 0;
-  if(fabs(cuCabsf(sum))>1e-10){
+  if(cuCabsf(sum)>1e-10){
     //factor = mod[index]/cuCabsf(sum);
-    Real mod2 = mod[index];
     Real mod2s = sum.x*sum.x+sum.y*sum.y;
     if(mod2+tolerance < mod2s) factor = sqrt((mod2+tolerance)/mod2s);
     else if(mod2-tolerance > mod2s) factor = sqrt((mod2-tolerance)/mod2s);
@@ -159,33 +105,7 @@ __global__  void applyESWMod(complexFormat* ESW, Real* mod, complexFormat* amp, 
   ESW[index].y = factor*sum.y-tmp.y;
 }
 
-__global__ void applyPoissonNoise(Real* wave, Real noiseLevel, curandStateMRG32k3a *state){
-  int x = blockIdx.x * blockDim.x + threadIdx.x;
-  int y = blockIdx.y * blockDim.y + threadIdx.y;
-  if(x >= cuda_row || y >= cuda_column) return;
-  int index = x*cuda_column + y;
-  curand_init(1,index,0,&state[index]);
-  wave[index]+=(curand_poisson(&state[index], noiseLevel)-noiseLevel)/cuda_rcolor;
-}
-__global__ void applyRandomPhase(complexFormat* wave, Real* beamstop, curandStateMRG32k3a *state){
-  int x = blockIdx.x * blockDim.x + threadIdx.x;
-  int y = blockIdx.y * blockDim.y + threadIdx.y;
-  if(x >= cuda_row || y >= cuda_column) return;
-  int index = x*cuda_column + y;
-  complexFormat tmp = wave[index];
-  if(beamstop && beamstop[index]>cuda_threshold) {
-    tmp.x = tmp.y = 0;
-  }
-  else{
-    Real mod = cuCabsf(wave[index]);
-    curand_init(1,index,0,&state[index]);
-    //curand_poisson(&state[index], noiseLevel) can do poission noise
-    Real randphase = curand_uniform(&state[index]);
-    tmp.x = mod*cos(randphase);
-    tmp.y = mod*sin(randphase);
-  }
-  wave[index] = tmp;
-}
+
 
 __global__  void applyESWSupport(complexFormat* ESW, complexFormat* ISW, complexFormat* ESWP, Real* length){
   int x = blockIdx.x * blockDim.x + threadIdx.x;
@@ -219,28 +139,6 @@ __global__  void applyESWSupport(complexFormat* ESW, complexFormat* ISW, complex
    */
 }
 
-__global__  void getMod(Real* mod, complexFormat* amp){
-  int x = blockIdx.x * blockDim.x + threadIdx.x;
-  int y = blockIdx.y * blockDim.y + threadIdx.y;
-  if(x >= cuda_row || y >= cuda_column) return;
-  int index = x*cuda_column + y;
-  mod[index] = cuCabsf(amp[index]);
-}
-__global__  void getMod2(Real* mod2, complexFormat* amp){
-  int x = blockIdx.x * blockDim.x + threadIdx.x;
-  int y = blockIdx.y * blockDim.y + threadIdx.y;
-  if(x >= cuda_row || y >= cuda_column) return;
-  int index = x*cuda_column + y;
-  mod2[index] = pow(amp[index].x,2)+pow(amp[index].y,2);
-}
-__global__ void add(complexFormat* a, complexFormat* b){
-  int x = blockIdx.x * blockDim.x + threadIdx.x;
-  int y = blockIdx.y * blockDim.y + threadIdx.y;
-  if(x >= cuda_row || y >= cuda_column) return;
-  int index = x*cuda_column + y;
-  a[index]=cuCaddf(a[index],b[index]);
-}
-
 __global__ void takeMod2Diff(complexFormat* a, Real* b, Real *output, Real *bs){
   int x = blockIdx.x * blockDim.x + threadIdx.x;
   int y = blockIdx.y * blockDim.y + threadIdx.y;
@@ -270,7 +168,7 @@ __global__ void calcESW(complexFormat* sample, complexFormat* ISW){
   int index = x*cuda_column + y;
   complexFormat tmp = sample[index];
   Real ttmp = tmp.y;
-  tmp.y=1-tmp.x;   // We are ignoring the factor (-i) each time we do fresnel propagation, which causes this transform in the ISW. ISW=iA ->  ESW=(O-1)A=(i-iO)ISW
+  tmp.y=tmp.x;   // We are ignoring the factor (-i) each time we do fresnel propagation, which causes this transform in the ISW. ISW=iA ->  ESW=(O-1)A=(i-iO)ISW
                    // When we do reconstruction, ESW is reconstructed, so O = 1+i*ESW/ISW
   tmp.x=ttmp;
   sample[index]=cuCmulf(tmp,ISW[index]);
@@ -281,8 +179,8 @@ __global__ void calcO(complexFormat* ESW, complexFormat* ISW){
   int y = blockIdx.y * blockDim.y + threadIdx.y;
   if(x >= cuda_row || y >= cuda_column) return;
   int index = x*cuda_column + y;
-  if(cuCabsf(ISW[index])<0.1) {
-    ESW[index].x = 1;
+  if(cuCabsf(ISW[index])<1e-4) {
+    ESW[index].x = 0;
     ESW[index].y = 0;
     return;
   }
@@ -296,82 +194,6 @@ __global__ void calcO(complexFormat* ESW, complexFormat* ISW){
   ESW[index].y=tmp.y;
 }
 
-__global__ void applyMod(complexFormat* source, Real* target, Real *bs = 0, bool loose=0, int iter = 0, int noiseLevel = 0){
-  assert(source!=0);
-  assert(target!=0);
-  int x = blockIdx.x * blockDim.x + threadIdx.x;
-  int y = blockIdx.y * blockDim.y + threadIdx.y;
-  if(x >= cuda_row || y >= cuda_column) return;
-  Real maximum = pow(mergeDepth,2)*cuda_scale*0.95;
-  int index = x*cuda_column + y;
-  Real mod2 = target[index];
-  if(mod2<0) mod2=0;
-  if(loose && bs && bs[index]>0.5) {
-    if(iter > 500) return;
-    else mod2 = maximum+1;
-  }
-  Real tolerance = 0;//1./cuda_rcolor*cuda_scale+1.5*sqrtf(noiseLevel)/cuda_rcolor; // fluctuation caused by bit depth and noise
-  complexFormat sourcedata = source[index];
-  Real ratiox = 1;
-  Real ratioy = 1;
-  Real srcmod2 = sourcedata.x*sourcedata.x + sourcedata.y*sourcedata.y;
-  if(mod2>=maximum) {
-    if(loose) mod2 = max(maximum,srcmod2);
-    else tolerance*=1000;
-  }
-  Real diff = mod2-srcmod2;
-  if(diff>tolerance){
-    ratioy=ratiox = sqrt((mod2-tolerance)/srcmod2);
-  }else if(diff < -tolerance ){
-    ratioy=ratiox = sqrt((mod2+tolerance)/srcmod2);
-  }
-  if(srcmod2 == 0){
-    ratiox = sqrt(mod2);
-    ratioy = 0;
-  }
-  source[index].x = ratiox*sourcedata.x;
-  source[index].y = ratioy*sourcedata.y;
-}
-
-
-__global__ void createWaveFront(Real* d_intensity, Real* d_phase, complexFormat* objectWave, Real oversampling){
-  int x = blockIdx.x * blockDim.x + threadIdx.x;
-  int y = blockIdx.y * blockDim.y + threadIdx.y;
-  if(x >= cuda_row || y >= cuda_column) return;
-  int index = x*cuda_column+y;
-  Real marginratio = (1-1./oversampling)/2;
-  Real marginx = marginratio*cuda_row;
-  Real marginy = marginratio*cuda_column;
-  if(x<marginx || x >= cuda_row-marginx || y < marginy || y >= cuda_column-marginy){
-    objectWave[index].x = objectWave[index].y = 0;
-    return;
-  }
-  int targetindex = (x-marginx)*cuda_column/oversampling + y-marginy;
-  Real mod = sqrtf(max(0.,d_intensity[targetindex]));
-  Real phase = d_phase? (d_phase[targetindex]-0.5) : 0;
-  objectWave[index].x = mod*cos(phase);
-  objectWave[index].y = mod*sin(phase);
-}
-
-__global__ void multiplyPatternPhase_Device(complexFormat* amp, Real r_d_lambda, Real d_r_lambda){ // pixsize*pixsize*M_PI/(d*lambda) and 2*d*M_PI/lambda
-  int x = blockIdx.x * blockDim.x + threadIdx.x;
-  int y = blockIdx.y * blockDim.y + threadIdx.y;
-  if(x >= cuda_row || y >= cuda_column) return;
-  Real phase = (pow(x-(cuda_row>>1),2)+pow(y-(cuda_column>>1),2))*r_d_lambda+d_r_lambda;
-  int index = x*cuda_column + y;
-  complexFormat p = {cos(phase),sin(phase)};
-  amp[index] = cuCmulf(amp[index], p);
-}
-
-__global__ void multiplyFresnelPhase_Device(complexFormat* amp, Real phaseFactor){ // pixsize*pixsize*M_PI/(d*lambda) and 2*d*M_PI/lambda
-  int x = blockIdx.x * blockDim.x + threadIdx.x;
-  int y = blockIdx.y * blockDim.y + threadIdx.y;
-  if(x >= cuda_row || y >= cuda_column) return;
-  int index = x*cuda_column + y;
-  Real phase = phaseFactor*(pow(x-(cuda_row>>1),2)+pow(y-(cuda_column>>1),2));
-  complexFormat p = {cos(phase),sin(phase)};
-  amp[index] = cuCmulf(amp[index], p);
-}
 __device__ void ApplyHIOSupport(bool insideS, complexFormat &rhonp1, complexFormat &rhoprime, Real beta){
   if(insideS){
     rhonp1.x = rhoprime.x;
@@ -412,79 +234,27 @@ __device__ void ApplyPOSHIOSupport(bool insideS, complexFormat &rhonp1, complexF
   rhonp1.y -= beta*rhoprime.y;
 }
 
-
-class experimentConfig : public readConfig{
+class CDI : public experimentConfig{
   public:
-    //calculated later by init function, image size dependant
-    experimentConfig(const char* configfile):readConfig(configfile){}
-
-    cuPlotter plt;
-
-    Real enhancement = 0;
-    Real forwardFactor = 0;
-    Real fresnelFactor = 0;
-    Real inverseFactor = 0;
-
-    Real enhancementKCDI = 0;
-    Real forwardFactorKCDI = 0;
-    Real fresnelFactorKCDI = 0;
-    Real inverseFactorKCDI = 0;
-
-    Real   enhancementMid = 0;
-    Real forwardFactorMid = 0;
-    Real fresnelFactorMid = 0;
-    Real inverseFactorMid = 0;
-    Real resolution = 0;
-    int row = 0;
-    int column = 0;
-
-    Real dKCDI = 0;
-
+    CDI(const char* configfile):experimentConfig(configfile){}
     Real* patternData = 0;
     complexFormat* patternWave = 0;
-    complexFormat* objectWave = 0;
-    Real* KCDIpatternData = 0;
-    complexFormat* KCDIpatternWave = 0;
-    complexFormat* KCDIobjectWave = 0;
-
+    complexFormat* autoCorrelation = 0;
     Real* support = 0;
-    Real* beamstop = 0;
-
-
-    template<typename sptType>
-    void createBeamStop(sptType *spt){
-      sptType *cuda_spt;
-      gpuErrchk(cudaMalloc((void**)&cuda_spt,sizeof(sptType)));
-      cudaMemcpy(cuda_spt, spt, sizeof(sptType), cudaMemcpyHostToDevice);
-      createMask<<<numBlocks,threadsPerBlock>>>(beamstop, cuda_spt,1);
-      cudaFree(cuda_spt);
-    }
-
-    void propagate(complexFormat* datain, complexFormat* dataout, bool isforward){
+    void propagatepupil(complexFormat* datain, complexFormat* dataout, bool isforward){
       myCufftExec( *plan, datain, dataout, isforward? CUFFT_FORWARD: CUFFT_INVERSE);
-      applyNorm<<<numBlocks,threadsPerBlock>>>(dataout, isforward? forwardFactor: inverseFactor);
-    }
-    void propagateKCDI(complexFormat* datain, complexFormat* dataout, bool isforward){
-      myCufftExec( *plan, datain, dataout, isforward? CUFFT_FORWARD: CUFFT_INVERSE);
-      applyNorm<<<numBlocks,threadsPerBlock>>>(dataout, isforward? forwardFactorKCDI: inverseFactorKCDI);
+      applyNorm<<<numBlocks,threadsPerBlock>>>(dataout, isforward? forwardFactorpupil: inverseFactorpupil);
     }
     void propagateMid(complexFormat* datain, complexFormat* dataout, bool isforward){
       myCufftExec( *plan, datain, dataout, isforward? CUFFT_FORWARD: CUFFT_INVERSE);
       applyNorm<<<numBlocks,threadsPerBlock>>>(dataout, isforward? forwardFactorMid: inverseFactorMid);
     }
-    void multiplyPatternPhase(complexFormat* amp, Real distance){
-      multiplyPatternPhase_Device<<<numBlocks,threadsPerBlock>>>(amp, pixelsize*pixelsize*M_PI/(distance*lambda), 2*distance*M_PI/lambda);
-    }
     void multiplyPatternPhaseMid(complexFormat* amp, Real distance){
-      multiplyPatternPhase_Device<<<numBlocks,threadsPerBlock>>>(amp, resolution*resolution*M_PI/(distance*lambda), 2*distance*M_PI/lambda);
-    }
-    void multiplyFresnelPhase(complexFormat* amp, Real distance){
-      Real fresfactor = M_PI*lambda*distance/(pow(pixelsize*row,2));
-      multiplyFresnelPhase_Device<<<numBlocks,threadsPerBlock>>>(amp, fresfactor);
+      multiplyPatternPhase_factor(amp, resolution*resolution*M_PI/(distance*lambda), 2*distance*M_PI/lambda);
     }
     void multiplyFresnelPhaseMid(complexFormat* amp, Real distance){
       Real fresfactor = M_PI*lambda*distance/(pow(resolution*row,2));
-      multiplyFresnelPhase_Device<<<numBlocks,threadsPerBlock>>>(amp, fresfactor);
+      multiplyFresnelPhase_factor(amp, fresfactor);
     }
     void allocateMem(){
       printf("allocating memory\n");
@@ -493,9 +263,11 @@ class experimentConfig : public readConfig{
       cudaMalloc((void**)&beamstop, sz);
       cudaMalloc((void**)&objectWave, sz*2);
       cudaMalloc((void**)&patternWave, sz*2);
+      cudaMalloc((void**)&autoCorrelation, sz*2);
+      cudaMalloc((void**)&pupilpatternWave, sz*2);
       cudaMalloc((void**)&patternData, sz);
       printf("initializing cuda image\n");
-      init_cuda_image(row,column,rcolor);
+      init_cuda_image(row,column,rcolor,1./exposure);
       printf("initializing cuda plotter\n");
       plt.init(row,column);
     }
@@ -514,9 +286,9 @@ class experimentConfig : public readConfig{
         Real* phase = readImage(common.Phase.c_str(), tmp,tmp);
         d_phase = beamstop;
         gpuErrchk(cudaMemcpy(beamstop, phase, sz, cudaMemcpyHostToDevice));
-	free(phase);
+        free(phase);
       }
-      createWaveFront<<<numBlocks,threadsPerBlock>>>(d_intensity, d_phase, objectWave, oversampling);
+      createWaveFront<<<numBlocks,threadsPerBlock>>>(d_intensity, d_phase, (complexFormat*)objectWave, oversampling);
       if(isFresnel) multiplyFresnelPhase(objectWave, d);
        // if(setups.useRectHERALDO){
        //   pixeltype *rowp;
@@ -555,7 +327,6 @@ class experimentConfig : public readConfig{
       plt.plotComplex(objectWave, PHASE, 0, 1, "inputPhase", 0);
       //if(useRectHERALDO)
       //  setRectHERALDO<<<numBlocks,threadsPerBlock>>>(objectWave, oversampling);
-      //}
     }
     void readPattern(){
       Real* pattern = readImage(common.Pattern.c_str(), row, column);
@@ -563,69 +334,69 @@ class experimentConfig : public readConfig{
       cudaMemcpy(patternData, pattern, row*column*sizeof(Real), cudaMemcpyHostToDevice);
       free(pattern);
       cudaConvertFO<<<numBlocks,threadsPerBlock>>>(patternData);
+      applyNorm<<<numBlocks,threadsPerBlock>>>(patternData, 1./exposure);
       printf("Created pattern data\n");
     }
-    void init(){
-      if(runSim) {
-	printf("running simulation, reading input images\n");
-        readObjectWave();
-      }else{
-	printf("running reconstruction, reading input pattern\n");
-        readPattern();
-      }
-      C_circle cir;
-      cir.x0=row/2;
-      cir.y0=column/2;
-      cir.r=beamStopSize;
-      createBeamStop(&cir);
-      enhancement = pow(pixelsize,2)*sqrt(row*column)/(lambda*d); // this guarentee energy conservation
-      enhancement *= exposure; 
-      fresnelFactor = lambda*d/pow(pixelsize,2)/row/column;
-      forwardFactor = fresnelFactor*enhancement;
-      inverseFactor = 1./row/column/forwardFactor;
-      if(doKCDI) {
+    void calculateParameters(){
+      experimentConfig::calculateParameters();
+      if(dopupil) {
         Real k = row*pow(pixelsize,2)/(lambda*d);
-        dKCDI = d*k/(k+1);
-        resolution = lambda*dKCDI/(row*pixelsize);
+        dpupil = d*k/(k+1);
+        resolution = lambda*dpupil/(row*pixelsize);
         printf("Resolution=%4.2fum\n", resolution);
-        enhancementKCDI = pow(pixelsize,2)*sqrt(row*column)/(lambda*dKCDI); // this guarentee energy conservation
-        enhancementKCDI *= exposureKCDI;
-        fresnelFactorKCDI = lambda*dKCDI/pow(pixelsize,2)/row/column;
-        forwardFactorKCDI = fresnelFactorKCDI*enhancementKCDI;
-        inverseFactorKCDI = 1./row/column/forwardFactorKCDI;
-
-        enhancementMid = pow(resolution,2)*sqrt(row*column)/(lambda*(d-dKCDI)); // this guarentee energy conservation
-        fresnelFactorMid = lambda*(d-dKCDI)/pow(resolution,2)/row/column;
+        enhancementpupil = pow(pixelsize,2)*sqrt(row*column)/(lambda*dpupil); // this guarentee energy conservation
+        fresnelFactorpupil = lambda*dpupil/pow(pixelsize,2)/row/column;
+        forwardFactorpupil = fresnelFactorpupil*enhancementpupil;
+        inverseFactorpupil = 1./row/column/forwardFactorpupil;
+        enhancementMid = pow(resolution,2)*sqrt(row*column)/(lambda*(d-dpupil)); // this guarentee energy conservation
+        fresnelFactorMid = lambda*(d-dpupil)/pow(resolution,2)/row/column;
         forwardFactorMid = fresnelFactorMid*enhancementMid;
         inverseFactorMid = 1./row/column/forwardFactorMid;
       }
+    }
+    void init(){
+      if(runSim) {
+        printf("running simulation, reading input images\n");
+        readObjectWave();
+      }else{
+        printf("running reconstruction, reading input pattern\n");
+        readPattern();
+      }
+      if(useBS) createBeamStop();
+      calculateParameters();
+      //inittvFilter(row,column);
       curandStateMRG32k3a *devstates;
       gpuErrchk(cudaMalloc((void **)&devstates, column * row * sizeof(curandStateMRG32k3a)));
-      inittvFilter(row,column);
       if(runSim){
-	printf("Generating diffraction pattern\n");
+        printf("Generating diffraction pattern\n");
         propagate(objectWave, patternWave, 1);
         getMod2<<<numBlocks,threadsPerBlock>>>(patternData, patternWave);
         if(simCCDbit){
-	  printf("Applying Poisson noise\n");
-          plt.plotFloat(patternData, MOD, 1, 1, "theory_pattern", 1);
+          printf("Applying Poisson noise\n");
+          plt.plotFloat(patternData, MOD, 1, exposure, "theory_pattern", 1);
           applyPoissonNoise<<<numBlocks,threadsPerBlock>>>(patternData, noiseLevel, devstates);
         }
       }
       if(restart){
         complexFormat *wf = (complexFormat*) readComplexImage(common.restart.c_str());
         cudaMemcpy(patternWave, wf, row*column*sizeof(complexFormat), cudaMemcpyHostToDevice);
+        verbose(2,plt.plotComplex(patternWave, MOD2, 1, exposure, "restart_pattern", 1))
         free(wf);
       }else {
         if(!runSim) createWaveFront<<<numBlocks,threadsPerBlock>>>(patternData, 0, patternWave, 1);
         applyRandomPhase<<<numBlocks,threadsPerBlock>>>(patternWave, useBS?beamstop:0, devstates);
-        plt.plotFloat(patternData, MOD, 1, 1, "init_logpattern", 1);
-        plt.plotFloat(patternData, MOD, 1, 1, "init_pattern", 0);
+        plt.plotFloat(patternData, MOD, 1, exposure, "init_logpattern", 1);
+        plt.plotFloat(patternData, MOD, 1, exposure, "init_pattern", 0);
       }
+      myCufftExecR2C( *planR2C, patternData, (complexFormat*)pupilpatternWave);// re-use the memory allocated for pupil
+      cudaF(fillRedundantR2C)((complexFormat*)pupilpatternWave, autoCorrelation, 1./sqrt(row*column));
+      plt.plotComplex(autoCorrelation, IMAG, 1, 1, "autocorrelation_imag", 1); // only positive values are shown
+      plt.plotComplex(autoCorrelation, REAL, 1, 1, "autocorrelation_real", 1); // only positive values are shown
+      plt.plotComplex(autoCorrelation, MOD, 1, 1, "autocorrelation", 1);
       gpuErrchk(cudaFree(devstates));
       rect re;
-      re.startx = (oversampling-1)/2*row/oversampling-1;
-      re.starty = (oversampling-1)/2*column/oversampling-1;
+      re.startx = (oversampling_spt-1)/2*row/oversampling_spt-1;
+      re.starty = (oversampling_spt-1)/2*column/oversampling_spt-1;
       re.endx = row-re.startx;
       re.endy = column-re.starty;
       rect *cuda_spt;
@@ -649,7 +420,7 @@ __global__ void applySupport(complexFormat *gkp1, complexFormat *gkprime, Algori
   if(algo==RAAR) ApplyRAARSupport(inside,gkp1data,gkprimedata,cuda_beta_HIO);
   else if(algo==ER) ApplyERSupport(inside,gkp1data,gkprimedata);
   else if(algo==HIO) ApplyHIOSupport(inside,gkp1data,gkprimedata,cuda_beta_HIO);
-  if(fresnelFactor && iter < 100) {
+  if(fresnelFactor>1e-4 && iter < 300) {
     if(inside){
       Real phase = M_PI*fresnelFactor*(pow(x-(cuda_row>>1),2)+pow(y-(cuda_column>>1),2));
       //Real mod = cuCabs(gkp1data);
@@ -660,7 +431,7 @@ __global__ void applySupport(complexFormat *gkp1, complexFormat *gkprime, Algori
   }
 }
 
-complexFormat* phaseRetrieve(experimentConfig &setups){
+complexFormat* phaseRetrieve(CDI &setups){
   int row = setups.row;
   int column = setups.column;
   bool useShrinkMap = setups.useShrinkMap;
@@ -673,7 +444,7 @@ complexFormat* phaseRetrieve(experimentConfig &setups){
 
   size_t sz = row*column*sizeof(complexFormat);
   complexFormat *cuda_gkprime;
-  complexFormat *cuda_gkp1 = setups.objectWave;
+  complexFormat *cuda_gkp1 = (complexFormat*)setups.objectWave;
   complexFormat *cuda_fftresult = setups.patternWave;
   Real *cuda_targetfft = setups.patternData;
 
@@ -694,7 +465,7 @@ complexFormat* phaseRetrieve(experimentConfig &setups){
       if(setups.saveIter){
         setups.plt.plotComplex(cuda_gkp1, MOD2, 0, 1, ("recon_intensity"+iterstr).c_str(), 0);
         setups.plt.plotComplex(cuda_gkp1, PHASE, 0, 1, ("recon_phase"+iterstr).c_str(), 0);
-        setups.plt.plotComplex(cuda_fftresult, MOD2, 1, 1, ("recon_pattern"+iterstr).c_str(), 1);
+        setups.plt.plotComplex(cuda_fftresult, MOD2, 1, setups.exposure, ("recon_pattern"+iterstr).c_str(), 1);
       }
       /*
       if(iter>0){  //Do Total variation denoising during the reconstruction, not quite effective tho.
@@ -721,7 +492,7 @@ complexFormat* phaseRetrieve(experimentConfig &setups){
     */
     setups.propagate( cuda_gkp1, cuda_fftresult, 1);
     //update mask
-    if((iter > 0 && iter < 200) && iter%20==0 && useShrinkMap){
+    if((iter > 200 && iter < 400) && iter%20==0 && useShrinkMap){
       getMod<<<numBlocks,threadsPerBlock>>>(cuda_objMod,cuda_gkp1);
       int size = floor(gaussianSigma*6); // r=3 sigma to ensure the contribution outside kernel is negligible (0.01 of the maximum)
       size = size/2;
@@ -753,12 +524,12 @@ complexFormat* phaseRetrieve(experimentConfig &setups){
       }
     }
   }
-  setups.plt.plotComplex(cuda_fftresult, MOD2, 1, 1, "recon_pattern", 1);
+  setups.plt.plotComplex(cuda_fftresult, MOD2, 1, setups.exposure, "recon_pattern", 1);
+  setups.plt.plotComplex(cuda_fftresult, PHASE, 1, 1, "recon_pattern_phase", 1);
   applyMod<<<numBlocks,threadsPerBlock>>>(cuda_fftresult,cuda_targetfft,useBS?cir:0,1,setups.nIter, setups.noiseLevel);
+  if(setups.isFresnel) setups.multiplyFresnelPhase(cuda_gkp1, -setups.d);
   setups.plt.plotComplex(cuda_gkp1, MOD2, 0, 1, "recon_intensity", 0);
   setups.plt.plotComplex(cuda_gkp1, PHASE, 0, 1, "recon_phase", 0);
-  cudaFree(cuda_gkp1);
-  cudaFree(cuda_targetfft);
   cudaFree(cuda_gkprime);
   cudaFree(cuda_objMod);
 
@@ -830,12 +601,12 @@ __global__ void applyHIOACSupport(complexFormat* data,complexFormat* prime, sptT
 
 int main(int argc, char** argv )
 {
-  experimentConfig setups(argv[1]);
+  CDI setups(argv[1]);
   cudaFree(0); // to speed up the cudaMalloc; https://forums.developer.nvidia.com/t/cudamalloc-slow/40238
   if(argc < 2){
     printf("please feed the object intensity and phase image\n");
   }
-  if(setups.runSim) setups.d = setups.oversampling*setups.pixelsize*setups.beamspotsize/setups.lambda; //distance to guarentee setups.oversampling
+  if(setups.runSim) setups.d = setups.oversampling_spt*setups.pixelsize*setups.beamspotsize/setups.lambda; //distance to guarentee setups.oversampling
   setups.init();
 
   //-----------------------configure experiment setups-----------------------------
@@ -845,17 +616,22 @@ int main(int argc, char** argv )
   printf("fresnel factor = %f\n", setups.fresnelFactor);
   printf("enhancement = %f\n", setups.enhancement);
 
-  printf("KCDI Imaging distance = %4.2fcm\n", setups.dKCDI*1e-4);
-  printf("KCDI forward norm = %f\n", setups.forwardFactorKCDI);
-  printf("KCDI backward norm = %f\n", setups.inverseFactorKCDI);
-  printf("KCDI fresnel factor = %f\n", setups.fresnelFactorKCDI);
-  printf("KCDI enhancement = %f\n", setups.enhancementKCDI);
+  printf("pupil Imaging distance = %4.2fcm\n", setups.dpupil*1e-4);
+  printf("pupil forward norm = %f\n", setups.forwardFactorpupil);
+  printf("pupil backward norm = %f\n", setups.inverseFactorpupil);
+  printf("pupil fresnel factor = %f\n", setups.fresnelFactorpupil);
+  printf("pupil enhancement = %f\n", setups.enhancementpupil);
 
-  Real fresnelNumber = pi*pow(setups.beamspotsize,2)/(setups.d*setups.lambda);
+  Real fresnelNumber = M_PI*pow(setups.beamspotsize,2)/(setups.d*setups.lambda);
   printf("Fresnel Number = %f\n",fresnelNumber);
   Real beta_HIO = 0.9;
   cudaMemcpyToSymbol(cuda_beta_HIO,&beta_HIO,sizeof(beta_HIO));
   int sz = setups.row*setups.column*sizeof(complexFormat);
+  complexFormat* cuda_pupilAmp, *cuda_ESW, *cuda_debug, *cuda_ESWP, *cuda_ESWPattern, *cuda_pupilAmp_SIM;
+  if(setups.dopupil){
+    gpuErrchk(cudaMalloc((void**)&cuda_pupilAmp, sz));
+    if(setups.runSim) cudaMemcpy(cuda_pupilAmp, setups.objectWave, sz, cudaMemcpyDeviceToDevice);
+  }
   if(setups.doIteration) {
     phaseRetrieve(setups); 
     void* outputData = malloc(sz);
@@ -863,108 +639,101 @@ int main(int argc, char** argv )
     writeComplexImage(setups.common.restart.c_str(), outputData, setups.row, setups.column);//save the step
   }
 
-  //Now let's do KCDI
-  if(setups.doKCDI){ 
-    complexFormat* cuda_KCDIAmp, *cuda_ESW, *cuda_debug, *cuda_ESWP, *cuda_ESWPattern, *cuda_KCDIAmp_SIM;
-    Real* cuda_KCDImod;
-    gpuErrchk(cudaMalloc((void**)&cuda_KCDImod, sz/2));
-    gpuErrchk(cudaMalloc((void**)&cuda_KCDIAmp_SIM, sz));
+  //Now let's do pupil
+  if(setups.dopupil){ 
+    Real* cuda_pupilmod;
+    gpuErrchk(cudaMalloc((void**)&cuda_pupilmod, sz/2));
+    gpuErrchk(cudaMalloc((void**)&cuda_pupilAmp_SIM, sz));
     gpuErrchk(cudaMalloc((void**)&cuda_ESW, sz));
     gpuErrchk(cudaMalloc((void**)&cuda_ESWP, sz));
     gpuErrchk(cudaMalloc((void**)&cuda_ESWPattern, sz));
     gpuErrchk(cudaMalloc((void**)&cuda_debug, sz));
-    gpuErrchk(cudaMalloc((void**)&cuda_KCDIAmp, sz));
     if(setups.runSim){
-      cudaMemcpy(cuda_KCDIAmp, setups.objectWave, sz, cudaMemcpyDeviceToDevice);
+      cudaMemcpy(cuda_pupilAmp_SIM, cuda_pupilAmp, sz, cudaMemcpyDeviceToDevice);
+      setups.multiplyFresnelPhase(cuda_pupilAmp, -setups.d);
+      setups.multiplyFresnelPhaseMid(cuda_pupilAmp, setups.d-setups.dpupil);
+      setups.propagateMid(cuda_pupilAmp, cuda_pupilAmp, 1);
+      cudaConvertFO<<<numBlocks,threadsPerBlock>>>(cuda_pupilAmp);
+      setups.multiplyPatternPhaseMid(cuda_pupilAmp, setups.d-setups.dpupil);
 
-      setups.multiplyFresnelPhaseMid(cuda_KCDIAmp, setups.d-setups.dKCDI);
-      setups.propagateMid(cuda_KCDIAmp, cuda_KCDIAmp, 1);
-      cudaConvertFO<<<numBlocks,threadsPerBlock>>>(cuda_KCDIAmp);
-      setups.multiplyPatternPhaseMid(cuda_KCDIAmp, setups.d-setups.dKCDI);
-
-      setups.plt.plotComplex(cuda_KCDIAmp, MOD2, 0, 1, "ISW");
+      m_verbose(setups,2,setups.plt.plotComplex(cuda_pupilAmp, MOD2, 0, 1, "ISW"));
       int row, column;
-      Real* KCDIInput = readImage(setups.KCDI.Intensity.c_str(), row, column);
-      
-      cudaMemcpy(cuda_KCDImod, KCDIInput, sz/2, cudaMemcpyHostToDevice);
-      free(KCDIInput);
-      createWaveFront<<<numBlocks,threadsPerBlock>>>(cuda_KCDImod, 0, cuda_ESW, setups.oversampling);
-      setups.plt.plotComplex(cuda_ESW, MOD2, 0, 1, "KCDIsample", 0);
-      calcESW<<<numBlocks,threadsPerBlock>>>(cuda_ESW, cuda_KCDIAmp);
-      setups.plt.plotComplex(cuda_ESW, MOD2, 0, 1, "ESW");
+      Real* pupilInput = readImage(setups.pupil.Intensity.c_str(), row, column);
+      cudaMemcpy(cuda_pupilmod, pupilInput, sz/2, cudaMemcpyHostToDevice);
+      free(pupilInput);
+      createWaveFront<<<numBlocks,threadsPerBlock>>>(cuda_pupilmod, 0, cuda_ESW, row, column);
+      m_verbose(setups,1,setups.plt.plotComplex(cuda_ESW, MOD2, 0, 1, "pupilsample", 0));
+      calcESW<<<numBlocks,threadsPerBlock>>>(cuda_ESW, cuda_pupilAmp);
+      m_verbose(setups,2,setups.plt.plotComplex(cuda_ESW, MOD2, 0, 1, "ESW"));
 
-      setups.multiplyFresnelPhase(cuda_ESW, setups.dKCDI);
-      setups.propagateKCDI(cuda_ESW, cuda_ESW, 1);
-      //setups.multiplyPatternPhase(cuda_ESW, setups.dKCDI); //the same effect as setups.multiplyPatternPhase(cuda_KCDIAmp, -setups.dKCDI);
-      setups.plt.plotComplex(cuda_ESW, MOD2, 0, 1, "ESWPattern",1);
+      setups.multiplyFresnelPhase(cuda_ESW, setups.dpupil);
+      setups.propagatepupil(cuda_ESW, cuda_ESW, 1);
+      setups.multiplyPatternPhase(cuda_ESW, setups.dpupil); //the same effect as setups.multiplyPatternPhase(cuda_pupilAmp, -setups.dpupil);
+      m_verbose(setups,2,setups.plt.plotComplex(cuda_ESW, MOD2, 0, setups.exposure, "ESWPattern",1));
 
-      cudaMemcpy(cuda_KCDIAmp, setups.objectWave, sz, cudaMemcpyDeviceToDevice);
-      setups.multiplyFresnelPhase(cuda_KCDIAmp, setups.d);
-      setups.propagateKCDI(cuda_KCDIAmp, cuda_KCDIAmp, 1); // equivalent to fftresult
-      cudaMemcpy(cuda_KCDIAmp_SIM,cuda_KCDIAmp, sz, cudaMemcpyDeviceToDevice);
-      cudaConvertFO<<<numBlocks,threadsPerBlock>>>(cuda_KCDIAmp);
-      setups.multiplyPatternPhase(cuda_KCDIAmp, setups.d);
-      setups.multiplyPatternPhase(cuda_KCDIAmp, -setups.dKCDI);
+      setups.propagatepupil(cuda_pupilAmp_SIM, cuda_pupilAmp_SIM, 1); // equivalent to fftresult
+      cudaConvertFO<<<numBlocks,threadsPerBlock>>>(cuda_pupilAmp_SIM);
+      setups.multiplyPatternPhase(cuda_pupilAmp_SIM, setups.d);
 
-      setups.plt.plotComplex(cuda_KCDIAmp, MOD2, 0, 1, "srcPattern",1);
+      setups.plt.plotComplex(cuda_pupilAmp_SIM, MOD2, 0, setups.exposure, "srcPattern",0);
 
-      add<<<numBlocks,threadsPerBlock>>>(cuda_KCDIAmp, cuda_ESW);
-      getMod2<<<numBlocks,threadsPerBlock>>>(cuda_KCDImod, cuda_KCDIAmp);
+      add<<<numBlocks,threadsPerBlock>>>(cuda_pupilAmp_SIM, cuda_ESW);
+      getMod2<<<numBlocks,threadsPerBlock>>>(cuda_pupilmod, cuda_pupilAmp_SIM);
       curandStateMRG32k3a *devstates;
-      cudaMalloc((void **)&devstates, column * row * sizeof(curandStateMRG32k3a));
-      applyPoissonNoise<<<numBlocks,threadsPerBlock>>>(cuda_KCDImod, setups.noiseLevel, devstates);
+      cudaMalloc((void **)&devstates, setups.row*setups.column * sizeof(curandStateMRG32k3a));
+      applyPoissonNoise<<<numBlocks,threadsPerBlock>>>(cuda_pupilmod, setups.noiseLevel_pupil, devstates, 1./setups.exposurepupil);
       cudaFree(devstates);
-      setups.plt.plotComplex(cuda_KCDImod, MOD, 0, 1, "KCDI_logintensity", 1);
-      setups.plt.plotComplex(cuda_KCDIAmp, PHASE, 0, 1, "KCDI_phase", 0);
-      setups.plt.plotComplex(cuda_KCDImod, MOD, 0, 1, setups.KCDI.Pattern.c_str(), 0);
+      setups.plt.plotFloat(cuda_pupilmod, MOD, 0, setups.exposurepupil, "pupil_logintensity", 1);
+      setups.plt.plotComplex(cuda_pupilAmp, PHASE, 0, 1, "pupil_phase", 0);
+      setups.plt.plotFloat(cuda_pupilmod, MOD, 0, setups.exposurepupil, setups.pupil.Pattern.c_str(), 0);
     }else{
       int row, column;
-      Real* pattern = readImage(setups.KCDI.Pattern.c_str(),row,column); //reconstruction is better after integerization
-      cudaMemcpy(cuda_KCDImod, pattern, sz, cudaMemcpyHostToDevice);
+      Real* pattern = readImage(setups.pupil.Pattern.c_str(),row,column); //reconstruction is better after integerization
+      cudaMemcpy(cuda_pupilmod, pattern, sz/2, cudaMemcpyHostToDevice);
+      applyNorm<<<numBlocks,threadsPerBlock>>>(cuda_pupilmod, 1./setups.exposurepupil);
       free(pattern);
     }
-    //KCDI reconstruction needs:
+    //pupil reconstruction needs:
     //  1. fftresult from previous phaseRetrieve
-    //  2. KCDI pattern.
+    //  2. pupil pattern.
     //Storage:
     //  1. Amp_i
     //  2. ESW
     //  3. ISW
-    //  4. sqrt(KCDImod2)
+    //  4. sqrt(pupilmod2)
     //
-    //KCDI reconstruction procedure:
-    //      Amp_i = PatternPhase_d/PatternPhase_KCDI*fftresult
+    //pupil reconstruction procedure:
+    //      Amp_i = PatternPhase_d/PatternPhase_pupil*fftresult
     //  1. ISW = IFFT(Amp_i)
-    //  2. ESW = IFFT{(sqrt(KCDImod2)/mod(Amp_i)-1)*(Amp_i)}
-    //  3. validate: |FFT(ISW+ESW)| = sqrt(KCDImod2)
+    //  2. ESW = IFFT{(sqrt(pupilmod2)/mod(Amp_i)-1)*(Amp_i)}
+    //  3. validate: |FFT(ISW+ESW)| = sqrt(pupilmod2)
     //  4. if(|ESW+ISW| > |ISW|) ESW' = |ISW|/|ESW+ISW|*(ESW+ISW)-ISW
     //     else ESW'=ESW
     //     ESW'->ESW
     //  5. ESWfft = FFT(ESW)
-    //  6. ESWfft' = sqrt(KCDImod2)/|Amp_i+ESWfft|*(Amp_i+ESWfft)-Amp_i
+    //  6. ESWfft' = sqrt(pupilmod2)/|Amp_i+ESWfft|*(Amp_i+ESWfft)-Amp_i
     //  7. ESW = IFFT(ESWfft')
     //  repeat from step 4
 
     complexFormat* cuda_ISW;
     gpuErrchk(cudaMalloc((void**)&cuda_ISW, sz));
-    cudaMemcpy(cuda_KCDIAmp, setups.patternWave, sz, cudaMemcpyDeviceToDevice);
-    //cudaMemcpy(cuda_KCDIAmp, cuda_KCDIAmp_SIM, sz, cudaMemcpyHostToDevice);
-    cudaConvertFO<<<numBlocks,threadsPerBlock>>>(cuda_KCDIAmp);
-    applyNorm<<<numBlocks,threadsPerBlock>>>(cuda_KCDIAmp, sqrt(setups.exposureKCDI/setups.exposure));
-    setups.multiplyPatternPhase(cuda_KCDIAmp, setups.d);
-    setups.multiplyPatternPhase(cuda_KCDIAmp, -setups.dKCDI);
-    setups.plt.plotComplex(cuda_KCDIAmp, MOD2, 0, 1, "amp",0);
+    cudaMemcpy(cuda_pupilAmp, setups.patternWave, sz, cudaMemcpyDeviceToDevice);
+    //cudaMemcpy(cuda_pupilAmp, cuda_pupilAmp_SIM, sz, cudaMemcpyHostToDevice);
+    cudaConvertFO<<<numBlocks,threadsPerBlock>>>(cuda_pupilAmp);
+    setups.multiplyPatternPhase(cuda_pupilAmp, setups.d);
+    setups.multiplyPatternPhase(cuda_pupilAmp, -setups.dpupil);
+    setups.plt.plotComplex(cuda_pupilAmp, MOD2, 0, setups.exposure, "amp",0);
 
-    setups.propagateKCDI(cuda_KCDIAmp, cuda_ISW, 0);
-    setups.plt.plotComplex(cuda_ISW, MOD2, 0, 1, "ISW_debug",1);
+    setups.propagatepupil(cuda_pupilAmp, cuda_ISW, 0);
+    setups.plt.plotComplex(cuda_ISW, MOD2, 0, 1, "ISW_debug",0);
 
-    initESW<<<numBlocks,threadsPerBlock>>>(cuda_ESW, cuda_KCDImod, cuda_KCDIAmp);
-    setups.propagateKCDI(cuda_ESW, cuda_ESW, 0);
+    initESW<<<numBlocks,threadsPerBlock>>>(cuda_ESW, cuda_pupilmod, cuda_pupilAmp);
+    setups.propagatepupil(cuda_ESW, cuda_ESW, 0);
     cudaMemcpy(cuda_ESWP, cuda_ESW, sz, cudaMemcpyDeviceToDevice);
     Real *cuda_steplength, *steplength;//, lengthsum;
     steplength = (Real*)malloc(sz/2);
     cudaMalloc((void**)&cuda_steplength, sz/2);
-    for(int iter = 0; iter < setups.nIterKCDI ;iter++){
+    for(int iter = 0; iter < setups.nIterpupil ;iter++){
       applyESWSupport<<<numBlocks,threadsPerBlock>>>(cuda_ESW, cuda_ISW, cuda_ESWP, cuda_steplength);
       cudaMemcpy(steplength, cuda_steplength, sz/2, cudaMemcpyDeviceToHost);
       /*
@@ -973,15 +742,15 @@ int main(int argc, char** argv )
          if(iter%500==0) printf("step: %d, steplength=%f\n", iter, lengthsum);
          if(lengthsum<1e-6) break;
        */
-      setups.propagateKCDI(cuda_ESW, cuda_ESWPattern, 1);
-      applyESWMod<<<numBlocks,threadsPerBlock>>>(cuda_ESWPattern, cuda_KCDImod, cuda_KCDIAmp, 0);//setups.noiseLevel);
-      setups.propagateKCDI(cuda_ESWPattern, cuda_ESWP, 0);
+      setups.propagatepupil(cuda_ESW, cuda_ESWPattern, 1);
+      applyESWMod<<<numBlocks,threadsPerBlock>>>(cuda_ESWPattern, cuda_pupilmod, cuda_pupilAmp, 0);//setups.noiseLevel);
+      setups.propagatepupil(cuda_ESWPattern, cuda_ESWP, 0);
     }
 
     //convert from ESW to object
-    setups.propagateKCDI(cuda_ESW, cuda_ESWPattern, 1);
-    add<<<numBlocks,threadsPerBlock>>>(cuda_ESWPattern,cuda_KCDIAmp);
-    setups.plt.plotComplex(cuda_ESWPattern, MOD2, 0, 1, "ESW_pattern_recon", 1);
+    setups.propagatepupil(cuda_ESW, cuda_ESWPattern, 1);
+    add<<<numBlocks,threadsPerBlock>>>(cuda_ESWPattern,cuda_pupilAmp);
+    setups.plt.plotComplex(cuda_ESWPattern, MOD2, 0, setups.exposurepupil, "ESW_pattern_recon", 1);
 
     setups.plt.plotComplex(cuda_ESWP, MOD2, 0, 1, "ESW_recon");
 

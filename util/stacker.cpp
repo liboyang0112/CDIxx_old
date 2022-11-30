@@ -41,7 +41,7 @@ int main(int argc, char** argv )
         return -1;
     }
     vector<Mat> imagein;
-    int mergeDepth = 4;
+    int mergeDepth = 8;
     Mat bkg = imread(argv[1], IMREAD_UNCHANGED);
     int row = bkg.rows;
     int column = bkg.cols;

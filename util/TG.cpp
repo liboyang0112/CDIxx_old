@@ -31,7 +31,7 @@ Real gaussian(Real x, Real y, Real sigma){
 }
 
 Real gaussian_norm(Real x, Real y, Real sigma){
-  return 1./(2*pi*sigma*sigma)*gaussian(x,y,sigma);
+  return 1./(2*M_PI*sigma*sigma)*gaussian(x,y,sigma);
 }
 
 /******************************************************************************/
@@ -51,7 +51,7 @@ int main(int argc, char** argv )
     Real phi0 = dn*dx/lambda;
 
     int spotpix = spotSize/pixelsize;
-    Real k = sin(dhole/2/focus)*2*pi/lambda * pixelsize;
+    Real k = sin(dhole/2/focus)*2*M_PI/lambda * pixelsize;
     Mat image (row, column, CV_16UC(1), Scalar::all(0));
     Mat imageInput (row, column, float_cv_format(2), Scalar::all(0));
     Mat imageTarget (row, column, float_cv_format(2), Scalar::all(0));

@@ -29,7 +29,7 @@ Real* readImage(const char* name, int &row, int &col, bool isFrequency){
       for(int i = 0 ; i < imagein.total() ; i++) data[i] = ((float)(imagein.data[i]))/255;
     }
   }else if(imagein.depth() == CV_16U){
-    printf("input image nbits: 16");
+    printf("input image nbits: 16\n");
     for(int i = 0 ; i < imagein.total() ; i++) data[i] = ((float)(((uint16_t*)imagein.data)[i]))/65535;
   }else{  //Image data is float
     printf("Image depth %d is not recognized as integer type (%d or %d), Image data is treated as floats\n", imagein.depth(), CV_8U, CV_16U);

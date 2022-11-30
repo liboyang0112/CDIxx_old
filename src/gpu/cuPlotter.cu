@@ -49,7 +49,10 @@ __global__ void process(void* cudaData, pixeltype* cache, mode m, bool isFrequen
   if(target>=cuda_rcolor) {
     target=cuda_rcolor-1;
   }
-  if(target!=target) printf("ERROR: target is NAN\n");
+  if(target!=target) {
+ //   printf("ERROR: target is NAN\n");
+ //   exit(0);
+  }
   cache[targetx*cuda_column+targety] = floor(target);
 }
 
