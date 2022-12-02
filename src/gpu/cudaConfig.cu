@@ -101,6 +101,23 @@ __global__ void createWaveFront(Real* d_intensity, Real* d_phase, complexFormat*
   objectWave[index].y = mod*sin(phase);
 }
 
+__global__ void initRand(curandStateMRG32k3a *state){
+  int x = blockIdx.x * blockDim.x + threadIdx.x;
+  int y = blockIdx.y * blockDim.y + threadIdx.y;
+  if(x >= cuda_row || y >= cuda_column) return;
+  int index = x*cuda_column + y;
+  curand_init(1,index,0,&state[index]);
+}
+
+__global__ void applyPoissonNoise_WO(Real* wave, Real noiseLevel, curandStateMRG32k3a *state, Real scale){
+  int x = blockIdx.x * blockDim.x + threadIdx.x;
+  int y = blockIdx.y * blockDim.y + threadIdx.y;
+  if(x >= cuda_row || y >= cuda_column) return;
+  int index = x*cuda_column + y;
+  if(scale==0) scale = cuda_scale;
+  wave[index]+=scale*(curand_poisson(&state[index], noiseLevel)-noiseLevel)/cuda_rcolor;
+}
+
 __global__ void applyPoissonNoise(Real* wave, Real noiseLevel, curandStateMRG32k3a *state, Real scale){
   int x = blockIdx.x * blockDim.x + threadIdx.x;
   int y = blockIdx.y * blockDim.y + threadIdx.y;
@@ -135,8 +152,9 @@ __global__ void applyMod(complexFormat* source, Real* target, Real *bs, bool loo
   Real mod2 = target[index];
   if(mod2<0) mod2=0;
   if(loose && bs && bs[index]>0.5) {
-    if(iter > 500) return;
-    else mod2 = maximum+1;
+    //if(iter > 500) return;
+    //else mod2 = maximum+1;
+    return;
   }
   Real tolerance = 0;//1./cuda_rcolor*cuda_scale+1.5*sqrtf(noiseLevel)/cuda_rcolor; // fluctuation caused by bit depth and noise
   complexFormat sourcedata = source[index];

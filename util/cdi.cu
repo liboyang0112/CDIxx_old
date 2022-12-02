@@ -260,7 +260,6 @@ class CDI : public experimentConfig{
       printf("allocating memory\n");
       int sz = row*column*sizeof(Real);
       cudaMalloc((void**)&support, sz); //preallocation of support and beamstop
-      cudaMalloc((void**)&beamstop, sz);
       cudaMalloc((void**)&objectWave, sz*2);
       cudaMalloc((void**)&patternWave, sz*2);
       cudaMalloc((void**)&autoCorrelation, sz*2);
@@ -284,8 +283,8 @@ class CDI : public experimentConfig{
       if(phaseModulation) {
           int tmp;
         Real* phase = readImage(common.Phase.c_str(), tmp,tmp);
-        d_phase = beamstop;
-        gpuErrchk(cudaMemcpy(beamstop, phase, sz, cudaMemcpyHostToDevice));
+        d_phase = support;
+        gpuErrchk(cudaMemcpy(d_phase, phase, sz, cudaMemcpyHostToDevice));
         free(phase);
       }
       createWaveFront<<<numBlocks,threadsPerBlock>>>(d_intensity, d_phase, (complexFormat*)objectWave, oversampling);

@@ -17,6 +17,8 @@ __global__ void applyConvolution(Real *input, Real *output, Real* kernel, int ke
 __global__ void getMod(Real* mod, complexFormat* amp);
 __global__ void getMod2(Real* mod, complexFormat* amp);
 __global__ void applyPoissonNoise(Real* wave, Real noiseLevel, curandStateMRG32k3a *state, Real scale = 0);
+__global__ void applyPoissonNoise_WO(Real* wave, Real noiseLevel, curandStateMRG32k3a *state, Real scale = 0);
+__global__ void initRand(curandStateMRG32k3a *state);
 __global__ void fillRedundantR2C(complexFormat* data, complexFormat* dataout, Real factor);
 __global__ void applyMod(complexFormat* source, Real* target, Real *bs = 0, bool loose=0, int iter = 0, int noiseLevel = 0);
 __global__ void add(complexFormat* a, complexFormat* b, Real c = 1);

@@ -38,6 +38,7 @@ void experimentConfig::createBeamStop(){
   decltype(cir) *cuda_spt;
   gpuErrchk(cudaMalloc((void**)&cuda_spt,sizeof(cir)));
   cudaMemcpy(cuda_spt, &cir, sizeof(cir), cudaMemcpyHostToDevice);
+  cudaMalloc((void**)&beamstop, row*column*sizeof(Real));
   cudaF(createMask)(beamstop, cuda_spt,1);
   cudaFree(cuda_spt);
 }
