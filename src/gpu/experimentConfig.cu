@@ -36,18 +36,23 @@ void experimentConfig::createBeamStop(){
   cir.y0=column/2;
   cir.r=beamStopSize;
   decltype(cir) *cuda_spt;
-  gpuErrchk(cudaMalloc((void**)&cuda_spt,sizeof(cir)));
+  cuda_spt = (decltype(cir)*)memMngr.borrowCache(sizeof(cir));
   cudaMemcpy(cuda_spt, &cir, sizeof(cir), cudaMemcpyHostToDevice);
-  cudaMalloc((void**)&beamstop, row*column*sizeof(Real));
+  beamstop = (Real*)memMngr.borrowCache(row*column*sizeof(Real));
   cudaF(createMask)(beamstop, cuda_spt,1);
-  cudaFree(cuda_spt);
+  memMngr.returnCache(cuda_spt);
 }
 void experimentConfig::propagate(void* datain, void* dataout, bool isforward){
   myCufftExec( *plan, (complexFormat*)datain, (complexFormat*)dataout, isforward? CUFFT_FORWARD: CUFFT_INVERSE);
   applyNorm<<<numBlocks,threadsPerBlock>>>((complexFormat*)dataout, isforward? forwardFactor: inverseFactor);
 }
 void experimentConfig::multiplyPatternPhase(void* amp, Real distance){
-  multiplyPatternPhase_Device<<<numBlocks,threadsPerBlock>>>((complexFormat*)amp, pixelsize*pixelsize*M_PI/(distance*lambda), 2*distance*M_PI/lambda-M_PI/2);
+  multiplyPatternPhase_Device<<<numBlocks,threadsPerBlock>>>((complexFormat*)amp, 
+       pixelsize*pixelsize*M_PI/(distance*lambda),  2*distance*M_PI/lambda-M_PI/2);
+}
+void experimentConfig::multiplyPatternPhase_reverse(void* amp, Real distance){
+  multiplyPatternPhase_Device<<<numBlocks,threadsPerBlock>>>((complexFormat*)amp, 
+      -pixelsize*pixelsize*M_PI/(distance*lambda), -2*distance*M_PI/lambda+M_PI/2);
 }
 void experimentConfig::multiplyPatternPhase_factor(void* amp, Real factor1, Real factor2){
   multiplyPatternPhase_Device<<<numBlocks,threadsPerBlock>>>((complexFormat*)amp, factor1, factor2-M_PI/2);

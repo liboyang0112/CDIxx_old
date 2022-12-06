@@ -1,8 +1,11 @@
 #ifndef __COMMON_H__
 #define __COMMON_H__
 #include "format.h"
+#include "memManager.h"
 
 // Declare the variables
+
+extern ccMemManager ccmemMngr;
 using namespace std;
 static const int mergeDepth = 1; //use it only when input image is integers
 static const int rcolor = pow(2,Bits);

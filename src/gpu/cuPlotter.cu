@@ -3,12 +3,12 @@
 #include <cassert>
 
 void cuPlotter::initcuData(size_t sz){
-  if(cuCache_data) cudaFree(cuCache_data);
-  cudaMalloc(&cuCache_data, sz);
+  if(cuCache_data) memMngr.returnCache(cuCache_data);
+  cuCache_data = (pixeltype*) memMngr.borrowCache(sz);
 }
 
 void cuPlotter::freeCuda(){
-  cudaFree(cuCache_data);
+  if(cuCache_data) memMngr.returnCache(cuCache_data);
 }
 
 __device__ Real cugetVal(mode m, complexFormat &data){
@@ -57,10 +57,10 @@ __global__ void process(void* cudaData, pixeltype* cache, mode m, bool isFrequen
 }
 
 void cuPlotter::processFloatData(void* cudaData, const mode m, bool isFrequency, Real decay, bool islog){
-  process<Real><<<numBlocks, threadsPerBlock>>>(cudaData, cuCache_data, m, isFrequency, decay, islog);
+  cudaF(process<Real>)(cudaData, cuCache_data, m, isFrequency, decay, islog);
   cudaMemcpy(cv_data, cuCache_data,rows*cols*sizeof(pixeltype), cudaMemcpyDeviceToHost); 
 };
 void cuPlotter::processComplexData(void* cudaData, const mode m, bool isFrequency, Real decay, bool islog){
-  process<complexFormat><<<numBlocks, threadsPerBlock>>>(cudaData, cuCache_data, m,isFrequency, decay, islog);
+  cudaF(process<complexFormat>)(cudaData, cuCache_data, m,isFrequency, decay, islog);
   cudaMemcpy(cv_data, cuCache_data,rows*cols*sizeof(pixeltype), cudaMemcpyDeviceToHost); 
 };

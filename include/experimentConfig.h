@@ -32,6 +32,7 @@ class experimentConfig : public readConfig{
     void createBeamStop();
     void propagate(void* datain, void* dataout, bool isforward);
     void multiplyPatternPhase(void* amp, Real distance);
+    void multiplyPatternPhase_reverse(void* amp, Real distance);
     void multiplyFresnelPhase(void* amp, Real distance);
     void multiplyPatternPhase_factor(void* amp, Real factor1, Real factor2);
     void multiplyFresnelPhase_factor(void* amp, Real factor);

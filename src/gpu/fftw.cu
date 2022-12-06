@@ -29,15 +29,15 @@ Mat* fftw ( Mat* in, Mat *out, bool isforward, Real ratio)
 
   if(cudaData==0) {
     sz = row*column*sizeof(complexFormat);
-    gpuErrchk(cudaMalloc((void**)&cudaData, sz));
+    cudaData = (complexFormat*)memMngr.borrowCache(sz);
     plan = new cufftHandle();
     cufftPlan2d ( plan, row, column, FFTformat);
   }else{
     if(sz!=row*column*sizeof(complexFormat)){
       printf("reconfiguring CUFFT\n");
       sz = row*column*sizeof(complexFormat);
-      cudaFree(cudaData);
-      gpuErrchk(cudaMalloc((void**)&cudaData, sz));
+      memMngr.returnCache(cudaData);
+      cudaData = (complexFormat*)memMngr.borrowCache(sz);
       cufftPlan2d ( plan, row, column, FFTformat);
     }
   }

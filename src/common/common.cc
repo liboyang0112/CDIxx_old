@@ -2,6 +2,7 @@
 #include "readCXI.h"
 #include "common.h"
 using namespace std;
+ccMemManager ccmemMngr;
 Real* readImage(const char* name, int &row, int &col, bool isFrequency){
   printf("reading file: %s\n", name);
   Real *data;

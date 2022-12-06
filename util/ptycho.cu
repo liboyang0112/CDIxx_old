@@ -32,7 +32,7 @@ struct CustomMax
 Real findMax(complexFormat* d_in, int num_items)
 {
   complexFormat *d_out = NULL;
-  cudaMalloc((void**)&d_out, sizeof(complexFormat));
+  d_out = (complexFormat*)memMngr.borrowCache(sizeof(complexFormat));
 
   void            *d_temp_storage = NULL;
   size_t          temp_storage_bytes = 0;
@@ -40,15 +40,15 @@ Real findMax(complexFormat* d_in, int num_items)
   complexFormat tmp;
   tmp.x = tmp.y = 0;
   gpuErrchk(cub::DeviceReduce::Reduce(d_temp_storage, temp_storage_bytes, d_in, d_out, num_items, max_op, tmp));
-  cudaMalloc(&d_temp_storage, temp_storage_bytes);
+  d_temp_storage = memMngr.borrowCache(temp_storage_bytes);
 
   // Run
   gpuErrchk(cub::DeviceReduce::Reduce(d_temp_storage, temp_storage_bytes, d_in, d_out, num_items, max_op, tmp));
   complexFormat output;
   cudaMemcpy(&output, d_out, sizeof(complexFormat), cudaMemcpyDeviceToHost);
 
-  if (d_out) cudaFree(d_out);
-  if (d_temp_storage) cudaFree(d_temp_storage);
+  if (d_out) memMngr.returnCache(d_out);
+  if (d_temp_storage) memMngr.returnCache(d_temp_storage);
   return output.x*output.x + output.y*output.y;
 }
 
@@ -151,25 +151,21 @@ class ptycho : public experimentConfig{
     int scany = 0;
     Real **patterns; //patterns[i*scany+j] points to the address on device to store pattern;
     complexFormat *esw;
-    complexFormat *complexCache;
     curandStateMRG32k3a *devstates = 0;
 
     ptycho(const char* configfile):experimentConfig(configfile){}
     void allocateMem(){
       if(devstates) return;
-      gpuErrchk(cudaMalloc((void **)&devstates, column_O * row_O * sizeof(curandStateMRG32k3a)));
+      devstates = (curandStateMRG32k3a*) memMngr.borrowCache(column_O * row_O * sizeof(curandStateMRG32k3a));
       printf("allocating memory\n");
       scanx = (row_O-row)/stepSize+1;
       scany = (column_O-column)/stepSize+1;
       printf("scanning %d x %d steps\n", scanx, scany);
-      cudaMalloc((void**)&objectWave, row_O*column_O*sizeof(Real)*2);
-      cudaMalloc((void**)&pupilpatternWave, sz*2);
-      cudaMalloc((void**)&esw, sz*2);
-      cudaMalloc((void**)&complexCache, sz*2);
+      objectWave = (complexFormat*)memMngr.borrowCache(row_O*column_O*sizeof(Real)*2);
+      pupilpatternWave = (complexFormat*)memMngr.borrowCache(sz*2);
+      esw = (complexFormat*) memMngr.borrowCache(sz*2);
       patterns = (Real**) malloc(scanx*scany*sizeof(Real*));
-      for(int i = 0; i < scanx*scany ; i++) {
-        cudaMalloc((void**)&(patterns[i]),sz);
-      }
+      memset(patterns, 0, scanx*scany*sizeof(Real*)/sizeof(char));
       printf("initializing cuda image\n");
       init_cuda_image(row_O,column_O,rcolor,1./exposure);
       cudaF(initRand)(devstates);
@@ -180,38 +176,40 @@ class ptycho : public experimentConfig{
       int objsz = row_O*column_O*sizeof(Real);
       Real* d_object_intensity;
       Real* d_object_phase;
-      cudaMalloc((void**)&d_object_intensity, objsz);
-      cudaMalloc((void**)&d_object_phase, objsz);
+      d_object_intensity = (Real*)memMngr.borrowCache(objsz);
+      d_object_phase = (Real*)memMngr.borrowCache(objsz);
       cudaMemcpy(d_object_intensity, object_intensity, objsz, cudaMemcpyHostToDevice);
       cudaMemcpy(d_object_phase, object_phase, objsz, cudaMemcpyHostToDevice);
-      free(object_intensity);
-      free(object_phase);
+      memMngr.returnCache(object_intensity);
+      memMngr.returnCache(object_phase);
       Real* pupil_intensity = readImage(pupil.Intensity.c_str(), row, column);
       sz = row*column*sizeof(Real);
       int row_tmp=row*oversampling;
       int column_tmp=column*oversampling;
       allocateMem();
       cudaF(createWaveFront)(d_object_intensity, d_object_phase, (complexFormat*)objectWave, 1);
-      cudaFree(d_object_intensity);
-      cudaFree(d_object_phase);
+      memMngr.returnCache(d_object_intensity);
+      memMngr.returnCache(d_object_phase);
       verbose(2,
           plt.init(row_O,column_O);
           plt.plotComplex(objectWave, MOD2, 0, 1, "inputObject");
       )
-      Real* d_intensity = patterns[0]; //use the memory allocated;
+      Real* d_intensity = (Real*) memMngr.borrowCache(sz); //use the memory allocated;
       cudaMemcpy(d_intensity, pupil_intensity, sz, cudaMemcpyHostToDevice);
       free(pupil_intensity);
       Real* d_phase = 0;
       if(doPhaseModulationPupil){
-        d_phase = patterns[1];
+        d_phase = (Real*) memMngr.borrowCache(sz);
         int tmp;
         Real* pupil_phase = readImage(pupil.Phase.c_str(), tmp,tmp);
         gpuErrchk(cudaMemcpy(d_phase, pupil_phase, sz, cudaMemcpyHostToDevice));
         free(pupil_phase);
       }
-      cudaMalloc((void**)&pupilobjectWave, row_tmp*column_tmp*sizeof(complexFormat));
+      pupilobjectWave = (complexFormat*)memMngr.borrowCache(row_tmp*column_tmp*sizeof(complexFormat));
       init_cuda_image(row_tmp,column_tmp,rcolor, 1./exposure);
       cudaF(createWaveFront)(d_intensity, d_phase, (complexFormat*)pupilobjectWave, oversampling);
+      memMngr.returnCache(d_intensity);
+      memMngr.returnCache(d_phase);
       plt.init(row_tmp,column_tmp);
       plt.plotComplex(pupilobjectWave, MOD2, 0, 1, "pupilIntensity", 0);
       opticalPropagate((complexFormat*)pupilobjectWave, lambda, dpupil, beamspotsize*oversampling, row_tmp, column_tmp);
@@ -234,6 +232,7 @@ class ptycho : public experimentConfig{
           cudaF(multiplyProbe)((complexFormat*)objectWave, (complexFormat*)pupilpatternWave, esw, i*stepSize, j*stepSize, row_O, column_O);
           verbose(5, plt.plotComplex(esw, MOD2, 0, 1, ("ptycho_esw"+to_string(i)+"_"+to_string(j)).c_str()));
           propagate(esw,esw,1);
+          if(!patterns[idx]) patterns[idx] = (Real*)memMngr.borrowCache(sz);
           cudaF(getMod2)(patterns[idx], esw);
           cudaF(applySupport)(patterns[idx], beamstop);
           if(simCCDbit) cudaF(applyPoissonNoise_WO)(patterns[idx], noiseLevel, devstates, 1./exposure);
@@ -253,6 +252,7 @@ class ptycho : public experimentConfig{
     void iterate(){
       init_cuda_image(row,column,rcolor, 1./exposure);
       Real objMax;
+      complexFormat *complexCache = (complexFormat*)memMngr.useOnsite(sz*2);
       for(int iter = 0; iter < nIter; iter++){
         int idx = 0;
         for(int i = 0; i < scanx; i++){
@@ -293,6 +293,7 @@ class ptycho : public experimentConfig{
       for(int i = 0; i < scanx; i++){
         for(int j = 0; j < scany; j++){
           if(idx!=0) pattern = readImage((common.Pattern+to_string(i)+"_"+to_string(j)+".png").c_str(), row, column);
+          if(!patterns[idx]) patterns[idx] = (Real*)memMngr.borrowCache(sz);
           cudaMemcpy(patterns[idx], pattern, sz, cudaMemcpyHostToDevice);
           free(pattern);
           cudaF(cudaConvertFO)(patterns[idx]);

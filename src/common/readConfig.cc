@@ -35,18 +35,8 @@ int readConfigFile(const char * filename, Config &cfg)
 readConfig::readConfig(const char* configfile){
   libconfig::Config cfg;
   int ret = readConfigFile(configfile, cfg);
+  cout << "config file: " << configfile << endl;
   if(ret==EXIT_FAILURE) exit(ret);
-
-  // Get the store name.
-  try
-  {
-    string name = cfg.lookup("name");
-    cout << "config file name: " << name << endl << endl;
-  }
-  catch(const SettingNotFoundException &nfex)
-  {
-    cerr << "No 'name' setting in configuration file." << endl;
-  }
 
   const Setting& root = cfg.getRoot();
 

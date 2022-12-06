@@ -10,3 +10,5 @@ dim3 numBlocks;
 const dim3 threadsPerBlock(16,16);
 complexFormat *cudaData = 0;
 cufftHandle *plan, *planR2C;
+void cuMemManager::c_malloc(void*& ptr, size_t sz) { cudaMalloc((void**)&ptr, sz); }
+cuMemManager memMngr;

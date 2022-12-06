@@ -7,6 +7,7 @@
 
 
 int main(int argc, char** argv){
+  if(argc==1) { printf("Tell me which one is the mnist data folder\n"); }
 	int row, col, rowraw, colraw, rowrf, colrf;
 	mnistData dat(argv[1],rowraw, colraw);
 	int refinement = 3;
