@@ -10,6 +10,8 @@ void init_cuda_image(int rows, int cols, int rcolor, Real scale){
     cudaMemcpyToSymbol(cuda_scale,&scale,sizeof(scale));
     numBlocks.x=(rows-1)/threadsPerBlock.x+1;
     numBlocks.y=(cols-1)/threadsPerBlock.y+1;
+};
+void init_fft(int rows, int cols){
     if(!plan){
       plan = new cufftHandle();
       planR2C = new cufftHandle();
@@ -19,8 +21,7 @@ void init_cuda_image(int rows, int cols, int rcolor, Real scale){
     }
     cufftPlan2d ( plan, rows, cols, FFTformat);
     cufftPlan2d ( planR2C, rows, cols, FFTformatR2C);
-};
-
+}
 __global__ void fillRedundantR2C(complexFormat* data, complexFormat* dataout, Real factor){
   int x = blockIdx.x * blockDim.x + threadIdx.x;
   int y = blockIdx.y * blockDim.y + threadIdx.y;
@@ -49,6 +50,40 @@ __global__ void applyNorm(complexFormat* data, Real factor){
   data[index].x*=factor;
   data[index].y*=factor;
 }
+
+__global__ void multiply(complexFormat* src, complexFormat* target){
+  int x = blockIdx.x * blockDim.x + threadIdx.x;
+  int y = blockIdx.y * blockDim.y + threadIdx.y;
+  if(x >= cuda_row || y >= cuda_column) return;
+  int index = x*cuda_column + y;
+  src[index] = cuCmulf(src[index], target[index]);
+}
+__global__ void forcePositive(complexFormat* a){
+  int x = blockIdx.x * blockDim.x + threadIdx.x;
+  int y = blockIdx.y * blockDim.y + threadIdx.y;
+  if(x >= cuda_row || y >= cuda_column) return;
+  int index = x*cuda_column + y;
+  if(a[index].x<0) a[index].x=0;
+  a[index].y = 0;
+}
+
+__global__ void multiply(complexFormat* store, complexFormat* src, complexFormat* target){
+  int x = blockIdx.x * blockDim.x + threadIdx.x;
+  int y = blockIdx.y * blockDim.y + threadIdx.y;
+  if(x >= cuda_row || y >= cuda_column) return;
+  int index = x*cuda_column + y;
+  store[index] = cuCmulf(src[index], target[index]);
+}
+
+__global__ void extendToComplex(Real* a, complexFormat* b){
+  int x = blockIdx.x * blockDim.x + threadIdx.x;
+  int y = blockIdx.y * blockDim.y + threadIdx.y;
+  if(x >= cuda_row || y >= cuda_column) return;
+  int index = x*cuda_column + y;
+  b[index].x = a[index];
+  b[index].y = 0;
+}
+
 __global__ void applyNorm(Real* data, Real factor){
   int x = blockIdx.x * blockDim.x + threadIdx.x;
   int y = blockIdx.y * blockDim.y + threadIdx.y;
@@ -156,7 +191,7 @@ __global__ void applyMod(complexFormat* source, Real* target, Real *bs, bool loo
     //else mod2 = maximum+1;
     return;
   }
-  Real tolerance = 0;//1./cuda_rcolor*cuda_scale+1.5*sqrtf(noiseLevel)/cuda_rcolor; // fluctuation caused by bit depth and noise
+  Real tolerance = 1./cuda_rcolor*cuda_scale+1.5*sqrtf(noiseLevel)/cuda_rcolor; // fluctuation caused by bit depth and noise
   complexFormat sourcedata = source[index];
   Real ratiox = 1;
   Real ratioy = 1;

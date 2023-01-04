@@ -8,7 +8,6 @@ using namespace cv;
 using namespace std;
 using pixeltype=uint16_t;
 auto format_cv = CV_16UC(1);
-static const int rcolor = pow(2,16);
 //using pixeltype=char;
 //auto format_cv = CV_8UC(1);
 Real getRatio(Mat &bkg, Mat &lowint, Mat &highint){

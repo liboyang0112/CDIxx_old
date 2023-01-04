@@ -2,6 +2,8 @@
 #include "memManager.h"
 #include <cstdlib>
 
+ccMemManager ccmemMngr;
+
 void* memManager::borrowCache(size_t sz){
   void *ret;
   auto iter = storage.find(sz);
@@ -20,10 +22,39 @@ void* memManager::borrowCache(size_t sz){
   return ret;
 }
 
+void memManager::registerMem(void* ptr, size_t sz){
+  auto iter = storage.find(sz);
+  if(iter == storage.end()) {
+    iter = storage.emplace(sz,0).first;
+    maxstorage.emplace(sz,0);
+    memory.emplace(sz, std::vector<void*>());
+  }
+  rentBook[ptr] = sz;
+}
+
 void* memManager::useOnsite(size_t sz){
   void* ret = borrowCache(sz);
   returnCache(ret);
   return ret;
+}
+
+void* memManager::borrowSame(void* mem){
+  auto iter = rentBook.find(mem);
+  if(iter == rentBook.end()) {
+    printf("This pointer %p, is not found in the rentBook, please check if the memory is managed by memManager or returned already.\n", mem);
+    exit(0);
+  }
+  int siz = iter->second;
+  return borrowCache(siz);
+}
+
+size_t memManager::getSize(void* mem){
+  auto iter = rentBook.find(mem);
+  if(iter == rentBook.end()) {
+    printf("This pointer %p, is not found in the rentBook, please check if the memory is managed by memManager or returned already.\n", mem);
+    exit(0);
+  }
+  return iter->second;
 }
 
 void memManager::returnCache(void* mem){

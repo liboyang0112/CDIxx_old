@@ -36,7 +36,7 @@ int main(int argc, char** argv){
 	vector<double> originalFunc;
 	vector<double> mlFunc;
 	vector<double> lengths = {0.8,1,1.3};
-	vector<double> weights = {0.3,0.2,0.5};
+	vector<double> weights = {1.0,1.,0.6};
 	originalFunc.resize(range,0);
 	mlFunc.resize(range,0);
 	for(int i = 0; i < range; i++){
@@ -50,16 +50,13 @@ int main(int argc, char** argv){
 		}
 		file2<< mlFunc[i] << endl;
 	}
-	vector<double> guessFunc[2] = {originalFunc,originalFunc};
-	guessFunc[1][400]+=1;
-	//guessFunc[0].resize(range,0);
-	//guessFunc[1].resize(range,0);
-	double stepsize = 0.00005;
-	int niteration = 300;
+	vector<double> guessFunc[2];// = {originalFunc,originalFunc};
+	guessFunc[0].resize(range,0);
+	guessFunc[1].resize(range,0);
+	double stepsize = 0.005;
+	int niteration = 3000;
 	double x = 0;
 	for(int iter = 0; iter < niteration; iter++){
-		x = 1-sin(x);
-		/*
 		for(int i = 0; i < range; i++){
 			guessFunc[iter%2][i] = mlFunc[i];
 			for(int j = 0; j < lengths.size(); j++){
@@ -71,9 +68,7 @@ int main(int argc, char** argv){
 			guessFunc[iter%2][i]/=weights[1];
 			guessFunc[iter%2][i] = guessFunc[iter%2][i]*stepsize + guessFunc[!(iter%2)][i]*(1-stepsize);
 		}
-		*/
 	}
-	printf("x=%f,x+sin(x)=%f",x, x+sin(x));
 	for(int i = 0; i < range; i++){
 		file3<<guessFunc[!(niteration%2)][i]<<endl;
 	}

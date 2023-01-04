@@ -19,7 +19,6 @@ class experimentConfig : public readConfig{
     void* pupilpatternWave = 0;
     void* pupilobjectWave = 0;
     Real* beamstop = 0;
-    Real dpupil = 0;
     Real* pupilpatternData = 0;
     Real enhancementpupil = 0;
     Real forwardFactorpupil = 0;

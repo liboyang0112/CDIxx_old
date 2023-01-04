@@ -2,7 +2,6 @@
 #include "readCXI.h"
 #include "common.h"
 using namespace std;
-ccMemManager ccmemMngr;
 Real* readImage(const char* name, int &row, int &col, bool isFrequency){
   printf("reading file: %s\n", name);
   Real *data;
@@ -12,14 +11,14 @@ Real* readImage(const char* name, int &row, int &col, bool isFrequency){
     Mat imagein = readCXI(name, &mask);  //32FC2, max 65535
     row = imagein.rows;
     col = imagein.cols;
-    data = (Real*)malloc(imagein.total()*sizeof(Real));
+    data = (Real*)ccmemMngr.borrowCache(imagein.total()*sizeof(Real));
     for(int i = 0 ; i < imagein.total() ; i++) data[i] = ((complex<float>*)imagein.data)[i].real()/rcolor;
     return data;
   }
   Mat imagein = imread( name, IMREAD_UNCHANGED  );
   row = imagein.rows;
   col = imagein.cols;
-  data = (Real*)malloc(imagein.total()*sizeof(Real));
+  data = (Real*)ccmemMngr.borrowCache(imagein.total()*sizeof(Real));
   if(imagein.depth() == CV_8U){
     printf("input image nbits: 8, channels=%d\n",imagein.channels());
     if(imagein.channels()>=3){
@@ -34,7 +33,9 @@ Real* readImage(const char* name, int &row, int &col, bool isFrequency){
     for(int i = 0 ; i < imagein.total() ; i++) data[i] = ((float)(((uint16_t*)imagein.data)[i]))/65535;
   }else{  //Image data is float
     printf("Image depth %d is not recognized as integer type (%d or %d), Image data is treated as floats\n", imagein.depth(), CV_8U, CV_16U);
-    memcpy(data,imagein.data,imagein.total()*sizeof(Real));
+    imagein.addref();
+    data = (Real*)imagein.data;
+    ccmemMngr.registerMem(data, row*col*sizeof(Real));
   }
   return data;
 }
@@ -55,7 +56,7 @@ void *readComplexImage(const char* name){
   fs["data"]>>(image);
   fs.release();
   size_t sz = image.rows*image.cols*sizeof(Real)*2;
-  void *data = malloc(sz);
+  void *data = ccmemMngr.borrowCache(sz);
   memcpy(data, image.data, sz);
   return data;
 };

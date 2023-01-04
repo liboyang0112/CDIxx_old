@@ -15,8 +15,11 @@ class memManager{
   public:
     memManager(){};
     void* borrowCache(size_t);
+    void* borrowSame(void*);
+    size_t getSize(void*);
     void* useOnsite(size_t); //no need to return, but you shouldn't ask for another borrow during the use of this pointer.
     void returnCache(void*);
+    void registerMem(void*, size_t);
     void retrieveAll();
     ~memManager(){};
 };
@@ -27,4 +30,5 @@ class ccMemManager : public memManager{
     ccMemManager():memManager(){};
 };
 
+extern ccMemManager ccmemMngr;
 #endif

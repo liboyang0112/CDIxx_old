@@ -73,6 +73,8 @@ readConfig::readConfig(const char* configfile){
     Job.lookupValue("exposurepupil",exposurepupil);
     Job.lookupValue("lambda",lambda);
     Job.lookupValue("d",d);
+    Job.lookupValue("dpupil",dpupil);
+    Job.lookupValue("positionUncertainty",positionUncertainty);
     Job.lookupValue("pixelsize",pixelsize);
     Job.lookupValue("beamspotsize",beamspotsize);
     Job.lookupValue("beamStopSize",beamStopSize);
@@ -97,6 +99,10 @@ readConfig::readConfig(const char* configfile){
     Job.lookupValue("nIter",nIter);
     Job.lookupValue("verbose",verbose);
     Job.lookupValue("algorithm",algorithm);
+    Job.lookupValue("mnistData",mnistData);
+    Job.lookupValue("domnist",domnist);
+    Job.lookupValue("mnistN",mnistN);
+    Job.lookupValue("costheta",costheta);
   }
   catch(const SettingNotFoundException &nfex)
   {
@@ -146,7 +152,6 @@ void Stringsplit(const string& str, const string& split, vector<string>& res)
 }
 
 AlgoParser::AlgoParser(std::string formula){
-  printf("parsing formula: %s\n",formula.c_str());
   remove(formula.begin(),formula.end(),' ');
   auto position = formula.find("(");
   while(position!= std::string::npos){
@@ -165,7 +170,6 @@ AlgoParser::AlgoParser(std::string formula){
   }
   std::vector<std::string> strs;
   Stringsplit(formula, "\\+", strs);
-  printf("bracket removed: %s\n",formula.c_str());
   int iParser = 0;
   for(auto mult : strs){
     auto starpos = mult.find('*');
@@ -182,10 +186,6 @@ AlgoParser::AlgoParser(std::string formula){
     }
   }
   restart();
-  for(int i = 0; i<count.size(); i++){
-    printf("%d*%d,", count[i], algoList[i]);
-  }
-  printf("\n");
 }
 void AlgoParser::restart(){
   currentAlgo = 0;

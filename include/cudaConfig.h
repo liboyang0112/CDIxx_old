@@ -8,7 +8,9 @@
 #define FFTformatR2C CUFFT_R2C
 #define myCufftExec cufftExecC2C
 #define myCufftExecR2C cufftExecR2C
+__global__ void forcePositive(complexFormat* a);
 __global__ void add(Real* a, Real* b, Real c = 1);
+__global__ void extendToComplex(Real* a, complexFormat* b);
 __global__ void applyNorm(complexFormat* data, Real factor);
 __global__ void applyNorm(Real* data, Real factor);
 __global__ void createWaveFront(Real* d_intensity, Real* d_phase, complexFormat* objectWave, Real oversampling);
@@ -23,6 +25,8 @@ __global__ void fillRedundantR2C(complexFormat* data, complexFormat* dataout, Re
 __global__ void applyMod(complexFormat* source, Real* target, Real *bs = 0, bool loose=0, int iter = 0, int noiseLevel = 0);
 __global__ void add(complexFormat* a, complexFormat* b, Real c = 1);
 __global__ void applyRandomPhase(complexFormat* wave, Real* beamstop, curandStateMRG32k3a *state);
+__global__ void multiply(complexFormat* source, complexFormat* target);
+__global__ void multiply(complexFormat* store, complexFormat* source, complexFormat* target);
 void opticalPropagate(complexFormat* field, Real lambda, Real d, Real imagesize, int rows, int cols);
 template <typename T>
 __global__ void cudaConvertFO(T* data){
@@ -55,7 +59,7 @@ __global__ void pad(T* src, T* dest, int row, int col){
 	int marginy = (cuda_column-col)/2;
 	int index = x*cuda_column + y;
 	if(x < marginx || x >= row+marginx || y < marginy || y >= col+marginy){
-		dest[index] = 0;
+		dest[index] = T();
 		return;
 	}
 	int targetindex = (x-marginx)*col + y-marginy;

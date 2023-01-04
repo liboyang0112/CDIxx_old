@@ -4,67 +4,44 @@
 #include "cuPlotter.h"
 #include "mnistData.h"
 #include "common.h"
-
+#include "monoChromo.h"
 
 int main(int argc, char** argv){
   if(argc==1) { printf("Tell me which one is the mnist data folder\n"); }
-	int row, col, rowraw, colraw, rowrf, colrf;
-	mnistData dat(argv[1],rowraw, colraw);
-	int refinement = 3;
-	rowrf = rowraw*refinement;
-	colrf = colraw*refinement;
-	col = row = 128;
-	Real exposure = 0.5;
-	Real minos = 2;
-	Real os[] = {minos,minos*11/9,minos*11/7};
-	Real maxos = os[2];
-	Real ratio[] = {0.3,0.4,0.3};
-	Real* d_input;
-	Real* d_inputraw;
-	Real* d_inputrf;
-	complexFormat *d_intensity;
-	complexFormat *d_patternAmp;
-	Real *d_pattern, *d_patternSum;
-	cudaMalloc((void**)&d_input, row*col*sizeof(Real));
-	cudaMalloc((void**)&d_inputrf, rowrf*colrf*sizeof(Real));
-	cudaMalloc((void**)&d_inputraw, rowraw*colraw*sizeof(Real));
-	cudaMalloc((void**)&d_intensity, row*col*sizeof(Real)*maxos*maxos*2);
-	cudaMalloc((void**)&d_pattern, row*col*sizeof(Real)*minos*minos);
-	cudaMalloc((void**)&d_patternAmp, row*col*sizeof(Real)*minos*minos*2);
-	cudaMalloc((void**)&d_patternSum, row*col*sizeof(Real)*minos*minos);
-	cuPlotter plt;
-	plt.init(row*minos, col*minos);
+  Real lambdas[] = {1,11./9,11./7, 11./5, 11./3};
+  Real spectra[] = {0.1,0.4,0.3,0.2, 0.1};
+  monoChromo mwl(argv[1], 5, lambdas, spectra);
+  cuMnist *mnist_dat = 0;
+  int objrow = 128;
+  int objcol = 128;
+  Real* d_input;
+  if(mwl.domnist) {
+    mnist_dat = new cuMnist(mwl.mnistData.c_str(), 3, objrow, objcol);
+    cudaMalloc((void**)&d_input, objrow*objcol*sizeof(Real));
+  }
+  else {
+    Real* intensity = readImage(mwl.common.Intensity.c_str(), objrow, objcol);
+    cudaMalloc((void**)&d_input, objrow*objcol*sizeof(Real));
+    cudaMemcpy(d_input, intensity, objrow*objcol*sizeof(Real), cudaMemcpyHostToDevice);
+  }
+  mwl.init(objrow,objcol);
+  Real *d_patternSum;
+  complexFormat *single = (complexFormat*)memMngr.borrowCache(mwl.row*mwl.column*sizeof(Real)*2);
+  complexFormat *d_CpatternSum;
+  Real *d_solved;
+  cudaMalloc((void**)&d_patternSum, mwl.row*mwl.column*sizeof(Real));
+  cudaMalloc((void**)&d_CpatternSum, mwl.row*mwl.column*sizeof(Real)*2);
+  cudaMalloc((void**)&d_solved, mwl.row*mwl.column*sizeof(Real)*2);
+  for(int j = 0; j < mwl.domnist?3000:1; j++){
+    if(mwl.domnist) mnist_dat->cuRead(d_input);
+    mwl.generateMWL(d_input, d_patternSum, single);
+    cudaF(extendToComplex)(d_patternSum, d_CpatternSum);
+    //mwl.solveMWL(d_CpatternSum, d_solved, single);
+    mwl.solveMWL(d_CpatternSum, d_solved);
+    mwl.plt.plotFloat(d_patternSum, MOD, 0, 1, ("merged"+to_string(j)).c_str(), 0);
+    mwl.plt.plotComplex(d_solved, MOD, 0, 1, ("solved"+to_string(j)).c_str(), 0);
+  }
 
-	for(int j = 0; j < 3000; j++){
-		cudaMemcpy(d_inputraw, dat.read(), rowraw*colraw*sizeof(Real), cudaMemcpyHostToDevice);
-		init_cuda_image(rowrf, colrf, 65536, 1);
-		cudaF(refine)(d_inputraw, d_inputrf, refinement);
-		init_cuda_image(row, col, 65536, 1);
-		cudaF(pad)(d_inputrf, d_input, rowrf, colrf);
-		for(int i = 0; i < 3; i++){
-			int thisrow = row*os[i];
-			int thiscol = col*os[i];
-			init_cuda_image(thisrow, thiscol, 65536, 1);
-			cudaF(createWaveFront)(d_input, 0, d_intensity, os[i]);
-			if(i==0) plt.plotComplex(d_intensity, MOD2, 0, 1, ("object"+to_string(j)).c_str(), 0);
-			myCufftExec( *plan, d_intensity,d_intensity, CUFFT_FORWARD);
-			cudaF(cudaConvertFO)(d_intensity);
-			init_cuda_image(row*minos, col*minos, 65536, 1);
-			cudaF(crop)(d_intensity,d_patternAmp,thisrow,thiscol);
-			cudaF(applyNorm)(d_patternAmp, exposure*ratio[i]/sqrt(thiscol*thisrow));
-			if(i==0) {
-				cudaF(getMod2)(d_patternSum, d_patternAmp);
-				plt.plotFloat(d_patternSum, MOD, 0, 1./ratio[i], ("single"+to_string(j)).c_str(), 0);
-				//plt.plotFloat(d_patternSum, MOD, 0, 1./ratio[i], ("singlelog"+to_string(i)).c_str(), 1);
-			}else{
-				cudaF(getMod2)(d_pattern, d_patternAmp);
-				cudaF(add)(d_patternSum, d_pattern, 1);
-			}
-		}
-		plt.plotFloat(d_patternSum, MOD, 0, 1, ("merged"+to_string(j)).c_str(), 0);
-		//plt.plotFloat(d_patternSum, MOD, 0, 1, "mergedlog", 1);
-	}
-
-	return 0;
+  return 0;
 }
 

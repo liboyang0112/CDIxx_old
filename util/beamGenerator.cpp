@@ -13,8 +13,8 @@ double gaussian(double x, double y, double sigma){
 }
 int main(int argc, char** argv )
 {
-  int row = 32;
-  int column = 32;
+  int row = 256;
+  int column = 256;
   Mat image (row, column, float_cv_format(1), Scalar::all(0));
   int rad = row/2;
   int radcut = row/2;
