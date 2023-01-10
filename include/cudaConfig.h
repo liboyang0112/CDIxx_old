@@ -41,6 +41,37 @@ __global__ void cudaConvertFO(T* data){
 }
 
 template <typename T>
+__global__ void cudaConvertFO(T* data, T* out){
+  int x = blockIdx.x * blockDim.x + threadIdx.x;
+  int y = blockIdx.y * blockDim.y + threadIdx.y;
+  if(x >= (cuda_row>>1) || y >= cuda_column) return;
+  int index = x*cuda_column + y;
+  int indexp = (x+(cuda_row>>1))*cuda_column + (y >= (cuda_column>>1)? y-(cuda_column>>1): (y+(cuda_column>>1)));
+  T tmp = data[index];
+  out[index]=data[indexp];
+  out[indexp]=tmp;
+}
+
+template <typename T>
+__global__ void zeroEdge(T* a, int n){
+  int x = blockIdx.x * blockDim.x + threadIdx.x;
+  int y = blockIdx.y * blockDim.y + threadIdx.y;
+	if(x >= cuda_row || y >= cuda_column) return;
+  int index = x*cuda_column + y;
+  if(x<n || x>=cuda_row-n || y < n || y >= cuda_column-n)
+    a[index] = T();
+}
+
+template <typename T1, typename T2>
+__global__ void assignVal(T1* out, T2* input){
+	int x = blockIdx.x * blockDim.x + threadIdx.x;
+	int y = blockIdx.y * blockDim.y + threadIdx.y;
+	if(x >= cuda_row || y >= cuda_column) return;
+	int index = x*cuda_column + y;
+	out[index] = input[index];
+}
+
+template <typename T>
 __global__ void crop(T* src, T* dest, int row, int col){
 	int x = blockIdx.x * blockDim.x + threadIdx.x;
 	int y = blockIdx.y * blockDim.y + threadIdx.y;

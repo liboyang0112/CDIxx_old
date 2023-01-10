@@ -5,13 +5,16 @@
 void cuPlotter::initcuData(size_t sz){
   if(cuCache_data) memMngr.returnCache(cuCache_data);
   if(cuCache_float_data) memMngr.returnCache(cuCache_float_data);
+  if(cuCache_complex_data) memMngr.returnCache(cuCache_complex_data);
   cuCache_data = (pixeltype*) memMngr.borrowCache(sz*sizeof(pixeltype));
   cuCache_float_data = (Real*) memMngr.borrowCache(sz*sizeof(Real));
+  cuCache_complex_data = (complexFormat*) memMngr.borrowCache(sz*sizeof(complexFormat));
 }
 
 void cuPlotter::freeCuda(){
   if(cuCache_data) memMngr.returnCache(cuCache_data);
   if(cuCache_float_data) memMngr.returnCache(cuCache_float_data);
+  if(cuCache_complex_data) memMngr.returnCache(cuCache_complex_data);
 }
 
 __device__ Real cugetVal(mode m, complexFormat &data){
@@ -82,6 +85,12 @@ void cuPlotter::processPhaseData(void* cudaData, const mode m, bool isFrequency,
   cudaMemcpy(cv_float_data, cuCache_float_data,rows*cols*sizeof(Real), cudaMemcpyDeviceToHost); 
 };
 
+void cuPlotter::saveFloatData(void* cudaData){
+  cudaMemcpy(cv_float_data, cudaData, rows*cols*sizeof(Real), cudaMemcpyDeviceToHost); 
+};
+void cuPlotter::saveComplexData(void* cudaData){
+  cudaMemcpy(cv_complex_data, cudaData, rows*cols*sizeof(complexFormat), cudaMemcpyDeviceToHost); 
+};
 void cuPlotter::processFloatData(void* cudaData, const mode m, bool isFrequency, Real decay, bool islog){
   cudaF(process<Real>)(cudaData, cuCache_data, m, isFrequency, decay, islog);
   cudaMemcpy(cv_data, cuCache_data,rows*cols*sizeof(pixeltype), cudaMemcpyDeviceToHost); 

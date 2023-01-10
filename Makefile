@@ -42,7 +42,7 @@ VTK_WRAP_LIB_SRC=$(wildcard src/vtk/*)
 VTK_WRAP_LIB_OBJ=$(patsubst src/vtk/%cc, ${LOCAL_OBJ}/vtk/%o, ${VTK_WRAP_LIB_SRC})
 VTK_WRAP_LIB=${LOCAL_LIB}/libvtkWrap.so
 
-LINK_FLAGS_EXT=$(shell pkg-config --libs opencv4 hdf5 tbb fftw3) -lfftw3_mpi -lcholmod -lfftw3_threads -lm -lpthread -lconfig++
+LINK_FLAGS_EXT=$(shell pkg-config --libs opencv4 hdf5 tbb fftw3) -lfftw3_mpi -lcholmod -lfftw3_threads -lm -lpthread -lconfig++ -lz
 LINK_FLAGS_EXT_CU=$(shell pkg-config --libs opencv4 hdf5)
 #LINK_FLAGS+=$(patsubst ${LOCAL_LIB}/lib%.so, -l%, ${CPP_LIB})
 LINK_FLAGS_CUDA_WRAP=$(patsubst ${LOCAL_LIB}/lib%.a, -l%, ${CUDA_WRAP_LIB})

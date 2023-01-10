@@ -7,8 +7,8 @@ class monoChromo : public experimentConfig{
     int nlambda;
     int *rows;
     int *cols;
-    monoChromo(const char* configfile, int nlambda_, Real* lambdas_, Real* spectra_);
-    void init(int nrow, int ncol);
+    monoChromo(const char* configfile);
+    void init(int nrow, int ncol, int nlambda_, Real* lambdas_, Real* spectra_);
     void generateMWL(void* d_input, void* d_patternSum, void* single = 0);
     void solveMWL(void* d_input, void* d_patternSum, void* initial = 0);
 };

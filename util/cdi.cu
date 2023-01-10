@@ -5,8 +5,6 @@
 #include <random>
 
 #include <stdio.h>
-#include <iostream>
-#include <fstream>
 #include <libconfig.h++>
 #include "cufft.h"
 #include "common.h"
@@ -291,7 +289,7 @@ class CDI : public experimentConfig{
       ccmemMngr.returnCache(intensity);
       Real* d_phase = 0;
       if(phaseModulation) {
-          int tmp;
+        int tmp;
         Real* phase = readImage(common.Phase.c_str(), tmp,tmp);
         d_phase = support;
         gpuErrchk(cudaMemcpy(d_phase, phase, sz, cudaMemcpyHostToDevice));
@@ -377,7 +375,7 @@ class CDI : public experimentConfig{
       cudaF(initRand)(devstates);
     }
     void prepareIter(){
-      if(domnist) {
+      if(runSim && domnist) {
         void* intensity = memMngr.borrowCache(row*column*sizeof(Real));
         void* phase = 0;
         mnist_dat->cuRead(intensity);
@@ -391,9 +389,9 @@ class CDI : public experimentConfig{
         initSupport();
       }
       if(isFresnel) multiplyFresnelPhase(objectWave, d);
-      verbose(2,plt.plotComplex(objectWave, MOD2, 0, 1, "inputIntensity", 0));
-      verbose(2,plt.plotComplex(objectWave, PHASE, 0, 1, "inputPhase", 0));
       if(runSim){
+        verbose(2,plt.plotComplex(objectWave, MOD2, 0, 1, "inputIntensity", 0));
+        verbose(2,plt.plotComplex(objectWave, PHASE, 0, 1, "inputPhase", 0));
         verbose(4,printf("Generating diffraction pattern\n"))
         propagate(objectWave, patternWave, 1);
         getMod2<<<numBlocks,threadsPerBlock>>>(patternData, patternWave);
@@ -409,7 +407,7 @@ class CDI : public experimentConfig{
         verbose(2,plt.plotComplex(patternWave, MOD2, 1, exposure, "restart_pattern", 1))
         ccmemMngr.returnCache(wf);
       }else {
-        if(!runSim) createWaveFront<<<numBlocks,threadsPerBlock>>>(patternData, 0, patternWave, 1);
+        createWaveFront<<<numBlocks,threadsPerBlock>>>(patternData, 0, patternWave, 1);
         applyRandomPhase<<<numBlocks,threadsPerBlock>>>(patternWave, useBS?beamstop:0, devstates);
         verbose(1,plt.plotFloat(patternData, MOD, 1, exposure, "init_logpattern", 1))
         plt.plotFloat(patternData, MOD, 1, exposure, ("init_pattern"+save_suffix).c_str(), 0);
@@ -428,8 +426,8 @@ class CDI : public experimentConfig{
       rect re;
       re.startx = (oversampling_spt-1)/2*row/oversampling_spt-1;
       re.starty = (oversampling_spt-1)/2*column/oversampling_spt-1;
-      re.endx = row-re.startx;
-      re.endy = column-re.starty;
+      re.endx = row-re.startx-2;
+      re.endy = column-re.starty-2;
       cuda_spt = (rect*)memMngr.borrowCache(sizeof(rect));
       cudaMemcpy(cuda_spt, &re, sizeof(rect), cudaMemcpyHostToDevice);
       support = (Real*)memMngr.borrowCache(row*column*sizeof(Real));
@@ -476,6 +474,7 @@ __global__ void applySupport(complexFormat *gkp1, complexFormat *gkprime, Algori
   complexFormat &gkprimedata = gkprime[index];
   if(algo==RAAR) ApplyRAARSupport(inside,gkp1data,gkprimedata,cuda_beta_HIO);
   else if(algo==ER) ApplyERSupport(inside,gkp1data,gkprimedata);
+  //else if(algo==HIO) ApplyHIOSupport(inside,gkp1data,gkprimedata,cuda_beta_HIO);
   else if(algo==HIO) ApplyHIOSupport(inside,gkp1data,gkprimedata,cuda_beta_HIO);
   if(fresnelFactor>1e-4 && iter < 400) {
     if(inside){
@@ -581,7 +580,11 @@ complexFormat* phaseRetrieve(CDI &setups){
   if(gaussianKernel) ccmemMngr.returnCache(gaussianKernel);
   if(d_gaussianKernel) memMngr.returnCache(d_gaussianKernel);
   m_verbose(setups,2,setups.plt.plotComplex(cuda_fftresult, MOD2, 1, setups.exposure, "recon_pattern", 1))
-  m_verbose(setups,4,setups.plt.plotComplex(cuda_fftresult, PHASE, 1, 1, "recon_pattern_phase", 1))
+  if(setups.verbose >= 4){
+    cudaF(cudaConvertFO)((complexFormat*)cuda_gkp1, cuda_gkprime);
+    setups.propagate(cuda_gkprime, cuda_gkprime, 1);
+    setups.plt.plotComplex(cuda_gkprime, PHASE, 1, 1, "recon_pattern_phase", 0);
+  }
   applyMod<<<numBlocks,threadsPerBlock>>>(cuda_fftresult,cuda_targetfft,useBS?cir:0,1,setups.nIter, setups.noiseLevel);
   setups.plt.plotComplex(cuda_gkp1, MOD2, 0, 1, ("recon_intensity"+setups.save_suffix).c_str(), 0);
   setups.plt.plotComplex(cuda_gkp1, PHASE, 0, 1, ("recon_phase"+setups.save_suffix).c_str(), 0);
@@ -691,7 +694,7 @@ int main(int argc, char** argv )
     if(setups.runSim) cudaMemcpy(cuda_pupilAmp, setups.objectWave, sz, cudaMemcpyDeviceToDevice);
   }
   if(setups.doIteration) {
-    if(setups.domnist){
+    if(setups.runSim && setups.domnist){
       for(int i = 0; i < setups.mnistN; i++){
         setups.save_suffix = to_string(i);
         setups.prepareIter();

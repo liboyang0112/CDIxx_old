@@ -42,7 +42,7 @@ void* memManager::borrowSame(void* mem){
   auto iter = rentBook.find(mem);
   if(iter == rentBook.end()) {
     printf("This pointer %p, is not found in the rentBook, please check if the memory is managed by memManager or returned already.\n", mem);
-    exit(0);
+    abort();
   }
   int siz = iter->second;
   return borrowCache(siz);
@@ -52,7 +52,7 @@ size_t memManager::getSize(void* mem){
   auto iter = rentBook.find(mem);
   if(iter == rentBook.end()) {
     printf("This pointer %p, is not found in the rentBook, please check if the memory is managed by memManager or returned already.\n", mem);
-    exit(0);
+    abort();
   }
   return iter->second;
 }
@@ -61,7 +61,7 @@ void memManager::returnCache(void* mem){
   auto iter = rentBook.find(mem);
   if(iter == rentBook.end()) {
     printf("This pointer %p, is not found in the rentBook, please check if the memory is managed by memManager or returned already.\n", mem);
-    exit(0);
+    abort();
   }
   int siz = iter->second;
   auto &nele = storage[siz];

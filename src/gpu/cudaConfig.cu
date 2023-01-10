@@ -150,7 +150,7 @@ __global__ void applyPoissonNoise_WO(Real* wave, Real noiseLevel, curandStateMRG
   if(x >= cuda_row || y >= cuda_column) return;
   int index = x*cuda_column + y;
   if(scale==0) scale = cuda_scale;
-  wave[index]+=scale*(curand_poisson(&state[index], noiseLevel)-noiseLevel)/cuda_rcolor;
+  wave[index]=scale*(int(wave[index]*cuda_rcolor/scale) + curand_poisson(&state[index], noiseLevel)-noiseLevel)/cuda_rcolor;
 }
 
 __global__ void applyPoissonNoise(Real* wave, Real noiseLevel, curandStateMRG32k3a *state, Real scale){
@@ -232,8 +232,6 @@ __global__ void applyRandomPhase(complexFormat* wave, Real* beamstop, curandStat
   }
   else{
     Real mod = cuCabsf(wave[index]);
-    curand_init(1,index,0,&state[index]);
-    //curand_poisson(&state[index], noiseLevel) can do poission noise
     Real randphase = curand_uniform(&state[index]);
     tmp.x = mod*cos(randphase);
     tmp.y = mod*sin(randphase);
