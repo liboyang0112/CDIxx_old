@@ -1,4 +1,4 @@
-#include <torch/torch.h>
+#include <torch/data/datasets/mnist.h>
 #include <iostream>
 #include <vector>
 #include "mnistData.h"

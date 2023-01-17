@@ -64,45 +64,12 @@ readConfig::readConfig(const char* configfile){
   // Output a list of all vdWFluids in the inventory.
   try
   {
+#define getVal(x,y) Job.lookupValue(#x,x);
     libconfig::Setting &Job = root["Job"];
-    Job.lookupValue("oversampling",oversampling);
-    Job.lookupValue("oversampling_spt",oversampling_spt);
-    Job.lookupValue("saveIter",saveIter);
-    Job.lookupValue("exposure",exposure);
-    Job.lookupValue("shrinkThreshold",shrinkThreshold);
-    Job.lookupValue("exposurepupil",exposurepupil);
-    Job.lookupValue("lambda",lambda);
-    Job.lookupValue("d",d);
-    Job.lookupValue("dpupil",dpupil);
-    Job.lookupValue("positionUncertainty",positionUncertainty);
-    Job.lookupValue("pixelsize",pixelsize);
-    Job.lookupValue("beamspotsize",beamspotsize);
-    Job.lookupValue("beamStopSize",beamStopSize);
-    Job.lookupValue("runSim",runSim);
-    Job.lookupValue("simCCDbit",simCCDbit);
-    Job.lookupValue("isFresnel",isFresnel);
-    Job.lookupValue("doIteration",doIteration);
-    Job.lookupValue("phaseModulation",phaseModulation);
-    Job.lookupValue("useGaussionLumination",useGaussionLumination);
-    Job.lookupValue("useGaussionHERALDO",useGaussionHERALDO);
-    Job.lookupValue("doCentral",doCentral);
-    Job.lookupValue("useRectHERALDO",useRectHERALDO);
-    Job.lookupValue("dopupil",dopupil);
-    Job.lookupValue("useDM",useDM);
-    Job.lookupValue("useBS",useBS);
-    Job.lookupValue("useShrinkMap",useShrinkMap);
-    Job.lookupValue("reconAC",reconAC);
-    Job.lookupValue("restart",restart);
-    Job.lookupValue("nIterpupil",nIterpupil);
-    Job.lookupValue("noiseLevel",noiseLevel);
-    Job.lookupValue("noiseLevel_pupil",noiseLevel_pupil);
-    Job.lookupValue("nIter",nIter);
-    Job.lookupValue("verbose",verbose);
-    Job.lookupValue("algorithm",algorithm);
-    Job.lookupValue("mnistData",mnistData);
-    Job.lookupValue("domnist",domnist);
-    Job.lookupValue("mnistN",mnistN);
-    Job.lookupValue("costheta",costheta);
+    BOOLVAR(getVal)
+    INTVAR(getVal)
+    REALVAR(getVal)
+    STRVAR(getVal)
   }
   catch(const SettingNotFoundException &nfex)
   {
@@ -118,25 +85,15 @@ void readConfig::print(){
   std::cout<<"pupil Phase="<<pupil.Phase<<std::endl;
   std::cout<<"pupil restart="<<pupil.restart<<std::endl;
   std::cout<<"pupil Pattern="<<pupil.Pattern<<std::endl;
-  std::cout<<"oversampling="<<oversampling<<std::endl;
-  std::cout<<"lambda="<<lambda<<std::endl;
-  std::cout<<"d="<<d<<std::endl;
-  std::cout<<"pixelsize="<<pixelsize<<std::endl;
-  std::cout<<"beamspotsize="<<beamspotsize<<std::endl;
-  std::cout<<"runSim="<<runSim<<std::endl;
-  std::cout<<"simCCDbit="<<simCCDbit<<std::endl;
-  std::cout<<"isFresnel="<<isFresnel<<std::endl;
-  std::cout<<"doIteration="<<doIteration<<std::endl;
-  std::cout<<"useGaussionLumination="<<useGaussionLumination<<std::endl;
-  std::cout<<"useGaussionHERALDO="<<useGaussionHERALDO<<std::endl;
-  std::cout<<"doCentral="<<doCentral<<std::endl;
-  std::cout<<"useRectHERALDO="<<useRectHERALDO<<std::endl;
-  std::cout<<"dopupil="<<dopupil<<std::endl;
-  std::cout<<"useDM="<<useDM<<std::endl;
-  std::cout<<"useBS="<<useBS<<std::endl;
-  std::cout<<"useShrinkMap="<<useShrinkMap<<std::endl;
-  std::cout<<"reconAC="<<reconAC<<std::endl;
-  std::cout<<"restart="<<restart<<std::endl;
+
+#define PRINTBOOL(x,y) std::cout<<"bool: "<<#x<<" = "<<x<<"  (default = "<<y<<")"<<std::endl;
+#define PRINTINT(x,y) std::cout<<"int: "<<#x<<" = "<<x<<"  (default = "<<y<<")"<<std::endl;
+#define PRINTREAL(x,y) std::cout<<"flost: "<<#x<<" = "<<x<<"  (default = "<<y<<")"<<std::endl;
+#define PRINTSTR(x,y) std::cout<<"string: "<<#x<<" = "<<x<<"  (default = "<<y<<")"<<std::endl;
+    BOOLVAR(PRINTBOOL)
+    INTVAR(PRINTINT)
+    REALVAR(PRINTREAL)
+    STRVAR(PRINTSTR)
 }
 
 void Stringsplit(const string& str, const string& split, vector<string>& res)

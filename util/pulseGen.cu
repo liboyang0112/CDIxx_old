@@ -58,6 +58,8 @@ int main(int argc, char** argv){
   Real endlambda = 1000;
   Real rate = endlambda/startlambda;
   getNormSpectrum(argv[2],argv[3],startlambda,nlambda,lambdas,spectra); //this may change startlambda
+  printf("lambda range = (%f, %f), ratio=%f", startlambda, endlambda, rate);
+  rate = 1.15;
 #endif
   std::ofstream spectrafile;
   spectrafile.open("spectra.txt",ios::out);

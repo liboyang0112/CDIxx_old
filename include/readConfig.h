@@ -27,50 +27,30 @@ struct CDIfiles{
   std::string restart;
 };
 
+#define DECINT(x,y) int x = y;
+#define DECBOOL(x,y) bool x = y;
+#define DECREAL(x,y) Real x = y;
+#define DECSTR(x,y) std::string x = y;
+
+#define INTVAR(F) \
+F(beamStopSize,5)F(nIter,1)F(nIterpupil,1)F(noiseLevel,0)F(noiseLevel_pupil,0)F(verbose,2)F(mnistN,3)
+
+#define BOOLVAR(F) \
+F(runSim,0)F(simCCDbit,0)F(isFresnel,0)F(doIteration,0)F(useGaussionLumination,0)F(useGaussionHERALDO,0)F(doCentral,0)F(useRectHERALDO,0)F(dopupil,0)F(useDM,0)F(useBS,0)F(useShrinkMap,0)F(reconAC,0)F(phaseModulation,0)F(restart,0)F(saveIter,0)F(domnist,0)
+
+#define REALVAR(F) \
+F(exposure,0)F(exposurepupil,0)F(oversampling,0)F(oversampling_spt,0)F(lambda,0)F(d,0)F(dpupil,0)F(pixelsize,0)F(beamspotsize,0)F(shrinkThreshold,0)F(positionUncertainty,0)F(costheta,1)
+
+#define STRVAR(F) \
+F(mnistData,"data")F(algorithm,"RAAR")
 class readConfig
 {
 public:
+  BOOLVAR(DECBOOL)
+  INTVAR(DECINT)
+  REALVAR(DECREAL)
+  STRVAR(DECSTR)
 //bool configs
-  bool runSim = 0;
-  bool simCCDbit = 0;
-  bool isFresnel = 0;
-  bool doIteration = 0;
-  bool useGaussionLumination = 0;
-  bool useGaussionHERALDO = 0;
-  bool doCentral =0;
-  bool useRectHERALDO = 0;
-  bool dopupil = 0;
-  bool useDM=0;
-  bool useBS=0;
-  bool useShrinkMap = 0;
-  bool reconAC = 0;
-  bool phaseModulation = 0;
-  bool restart=0;
-  bool saveIter=0;
-  bool domnist = 0;
-//integer configs
-  int beamStopSize = 10;
-  int nIter = 2000;
-  int nIterpupil = 2000;
-  int noiseLevel = 0;
-  int noiseLevel_pupil = 0;
-  int verbose = 0;
-  int mnistN = 3000;
-//float configs
-  Real exposure = 0.1;
-  Real exposurepupil = 0.1;
-  Real oversampling = 3;
-  Real oversampling_spt = 2;
-  Real lambda = 0.01;
-  Real d = 16e3;
-  Real dpupil = 100.;
-  Real pixelsize = 26;
-  Real beamspotsize = 200;
-  Real shrinkThreshold = 0.15;
-  Real positionUncertainty = 3;
-  Real costheta = 1.; // 1 means normal incidence.
-  std::string mnistData = "data";
-  std::string algorithm = "200*RAAR";
   CDIfiles pupil;
   CDIfiles common;
   readConfig(const char* configfile);

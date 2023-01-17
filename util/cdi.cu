@@ -235,6 +235,7 @@ __device__ void ApplyPOSHIOSupport(bool insideS, complexFormat &rhonp1, complexF
 class CDI : public experimentConfig{
   public:
     CDI(const char* configfile):experimentConfig(configfile){
+      verbose(2, print())
       if(runSim) d = oversampling_spt*pixelsize*beamspotsize/lambda; //distance to guarentee setups.oversampling
     }
     Real* patternData = 0;
