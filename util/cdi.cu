@@ -234,7 +234,9 @@ __device__ void ApplyPOSHIOSupport(bool insideS, complexFormat &rhonp1, complexF
 
 class CDI : public experimentConfig{
   public:
-    CDI(const char* configfile):experimentConfig(configfile){}
+    CDI(const char* configfile):experimentConfig(configfile){
+      if(runSim) d = oversampling_spt*pixelsize*beamspotsize/lambda; //distance to guarentee setups.oversampling
+    }
     Real* patternData = 0;
     complexFormat* patternWave = 0;
     complexFormat* autoCorrelation = 0;
@@ -344,6 +346,8 @@ class CDI : public experimentConfig{
     }
     void calculateParameters(){
       experimentConfig::calculateParameters();
+      Real beta_HIO = 0.9;
+      cudaMemcpyToSymbol(cuda_beta_HIO,&beta_HIO,sizeof(beta_HIO));
       if(dopupil) {
         Real k = row*pow(pixelsize,2)/(lambda*d);
         dpupil = d*k/(k+1);
@@ -359,7 +363,7 @@ class CDI : public experimentConfig{
         inverseFactorMid = 1./row/column/forwardFactorMid;
       }
     }
-    void init(){
+    void readFiles(){
       if(runSim) {
         printf("running simulation, reading input images\n");
         readObjectWave();
@@ -367,6 +371,16 @@ class CDI : public experimentConfig{
         printf("running reconstruction, reading input pattern\n");
         readPattern();
       }
+    }
+    void setPattern(int r, int c, void* pattern){
+      row = r;
+      column = c;
+      allocateMem();
+      patternData = (Real*) pattern;
+      //cudaConvertFO<<<numBlocks,threadsPerBlock>>>(patternData);
+      //applyNorm<<<numBlocks,threadsPerBlock>>>(patternData, 1./exposure);
+    }
+    void init(){
       if(useBS) createBeamStop();
       calculateParameters();
       inittvFilter(row,column);
@@ -398,7 +412,7 @@ class CDI : public experimentConfig{
         if(simCCDbit){
           verbose(4,printf("Applying Poisson noise\n"))
           verbose(1,plt.plotFloat(patternData, MOD, 1, exposure, "theory_pattern", 1));
-          applyPoissonNoise_WO<<<numBlocks,threadsPerBlock>>>(patternData, noiseLevel, devstates);
+          cudaF(applyPoissonNoise_WO)(patternData, noiseLevel, devstates);
         }
       }
       if(restart){
@@ -408,9 +422,9 @@ class CDI : public experimentConfig{
         ccmemMngr.returnCache(wf);
       }else {
         createWaveFront<<<numBlocks,threadsPerBlock>>>(patternData, 0, patternWave, 1);
-        applyRandomPhase<<<numBlocks,threadsPerBlock>>>(patternWave, useBS?beamstop:0, devstates);
         verbose(1,plt.plotFloat(patternData, MOD, 1, exposure, "init_logpattern", 1))
         plt.plotFloat(patternData, MOD, 1, exposure, ("init_pattern"+save_suffix).c_str(), 0);
+        applyRandomPhase<<<numBlocks,threadsPerBlock>>>(patternWave, useBS?beamstop:0, devstates);
       }
     }
     void checkAutoCorrelation(){
@@ -436,6 +450,14 @@ class CDI : public experimentConfig{
     void initSupport(){
       createMask<<<numBlocks,threadsPerBlock>>>(support, cuda_spt,0);
     }
+    complexFormat* phaseRetrieve();
+    void saveState(){
+      size_t sz = row*column*sizeof(complexFormat);
+      void* outputData = ccmemMngr.borrowCache(sz);
+      cudaMemcpy(outputData, patternWave, sz, cudaMemcpyDeviceToHost);
+      writeComplexImage(common.restart.c_str(), outputData, row, column);//save the step
+      ccmemMngr.returnCache(outputData);
+    }
 };
 
 __global__ void applySupportOblique(complexFormat *gkp1, complexFormat *gkprime, Algorithm algo, Real *spt, int iter = 0, Real fresnelFactor = 0, Real costheta_r = 1){
@@ -450,7 +472,7 @@ __global__ void applySupportOblique(complexFormat *gkp1, complexFormat *gkprime,
   complexFormat &gkprimedata = gkprime[index];
   if(algo==RAAR) ApplyRAARSupport(inside,gkp1data,gkprimedata,cuda_beta_HIO);
   else if(algo==ER) ApplyERSupport(inside,gkp1data,gkprimedata);
-  else if(algo==HIO) ApplyHIOSupport(inside,gkp1data,gkprimedata,cuda_beta_HIO);
+  else if(algo==HIO) ApplyPOSHIOSupport(inside,gkp1data,gkprimedata,cuda_beta_HIO);
   if(fresnelFactor>1e-4 && iter < 400) {
     if(inside){
       Real phase = M_PI*fresnelFactor*(pow((x-(cuda_row>>1))*costheta_r,2)+pow(y-(cuda_column>>1),2));
@@ -487,44 +509,37 @@ __global__ void applySupport(complexFormat *gkp1, complexFormat *gkprime, Algori
   }
 }
 
-complexFormat* phaseRetrieve(CDI &setups){
-  int row = setups.row;
-  int column = setups.column;
-  bool useShrinkMap = setups.useShrinkMap;
-  bool useBS = setups.useBS;
-  Real *cir = setups.beamstop;
+complexFormat* CDI::phaseRetrieve(){
   Real beta = -1;
   Real gammas = -1./beta;
   Real gammam = 1./beta;
   Real gaussianSigma = 2.5;
 
   size_t sz = row*column*sizeof(complexFormat);
-  complexFormat *cuda_gkprime;
-  complexFormat *cuda_gkp1 = (complexFormat*)setups.objectWave;
-  complexFormat *cuda_fftresult = setups.patternWave;
-  Real *cuda_targetfft = setups.patternData;
+  complexFormat *cuda_gkp1 = (complexFormat*)objectWave;
 
+  complexFormat *cuda_gkprime;
   Real *cuda_diff;
   Real *cuda_objMod;
   cuda_diff = (Real*) memMngr.borrowCache(sz/2);
   cuda_gkprime = (complexFormat*)memMngr.borrowCache(sz);
   cuda_objMod = (Real*)memMngr.borrowCache(sz/2);
-  cudaMemcpy(cuda_diff, cuda_targetfft, sz/2, cudaMemcpyDeviceToDevice);
+  cudaMemcpy(cuda_diff, patternData, sz/2, cudaMemcpyDeviceToDevice);
 
-  AlgoParser algo(setups.algorithm);
+  AlgoParser algo(algorithm);
   Real* d_gaussianKernel = 0;
   Real* gaussianKernel = 0;
-  for(int iter = 0; iter < setups.nIter; iter++){
+  for(int iter = 0; ; iter++){
     int ialgo = algo.next();
     if(ialgo<0) break;
     //start iteration
-    applyMod<<<numBlocks,threadsPerBlock>>>(cuda_fftresult,cuda_diff, useBS? cir:0, !setups.reconAC || iter > 1000,iter, setups.noiseLevel);
-    setups.propagate(cuda_fftresult, cuda_gkprime, 0);
-    if(setups.costheta == 1) applySupport<<<numBlocks,threadsPerBlock>>>(cuda_gkp1, cuda_gkprime, (Algorithm)ialgo, setups.support, iter, setups.isFresnel? setups.fresnelFactor:0);
-    else applySupportOblique<<<numBlocks,threadsPerBlock>>>(cuda_gkp1, cuda_gkprime, (Algorithm)ialgo, setups.support, iter, setups.isFresnel? setups.fresnelFactor:0, 1./setups.costheta);
+    cudaF(applyMod)(patternWave,cuda_diff, useBS? beamstop:0, !reconAC || iter > 1000,iter, noiseLevel);
+    propagate(patternWave, cuda_gkprime, 0);
+    if(costheta == 1) cudaF(applySupport)(cuda_gkp1, cuda_gkprime, (Algorithm)ialgo, support, iter, isFresnel? fresnelFactor:0);
+    else cudaF(applySupportOblique)(cuda_gkp1, cuda_gkprime, (Algorithm)ialgo, support, iter, isFresnel? fresnelFactor:0, 1./costheta);
     //update mask
     if(iter%20==0){
-      getMod<<<numBlocks,threadsPerBlock>>>(cuda_objMod,cuda_gkp1);
+      cudaF(getMod)(cuda_objMod,cuda_gkp1);
       if(iter > 0 && useShrinkMap){
         int size = floor(gaussianSigma*6); // r=3 sigma to ensure the contribution outside kernel is negligible (0.01 of the maximum)
         size = size/2;
@@ -544,9 +559,9 @@ complexFormat* phaseRetrieve(CDI &setups){
         for(int i = 0; i < width*width; i++)
 	        gaussianKernel[i] /= total;
         cudaMemcpy(d_gaussianKernel, gaussianKernel, kernelsz, cudaMemcpyHostToDevice);
-        applyConvolution<<<numBlocks,threadsPerBlock, pow(size*2+threadsPerBlock.x,2)*sizeof(Real)>>>(cuda_objMod, setups.support, d_gaussianKernel, size, size);
+        applyConvolution<<<numBlocks,threadsPerBlock, pow(size*2+threadsPerBlock.x,2)*sizeof(Real)>>>(cuda_objMod, support, d_gaussianKernel, size, size);
 
-        Real threshold = /*findMax(setups.support, row*column)*/setups.shrinkThreshold;
+        Real threshold = /*findMax(support, row*column)*/shrinkThreshold;
         cudaMemcpyToSymbol(cuda_threshold, &threshold, sizeof(threshold));
 
         if(gaussianSigma>1.5) {
@@ -558,43 +573,43 @@ complexFormat* phaseRetrieve(CDI &setups){
           //applyMod<<<numBlocks,threadsPerBlock>>>(cuda_gkp1, cuda_objMod);
       //}
     }
-    setups.propagate( cuda_gkp1, cuda_fftresult, 1);
+    propagate( cuda_gkp1, patternWave, 1);
     if(iter%100==0) {
       std::string iterstr = to_string(iter);
-      if(setups.saveIter){
-        setups.plt.plotComplex(cuda_gkp1, MOD2, 0, 1, ("recon_intensity"+iterstr).c_str(), 0);
-        setups.plt.plotComplex(cuda_gkp1, PHASE, 0, 1, ("recon_phase"+iterstr).c_str(), 0);
-        setups.plt.plotComplex(cuda_fftresult, MOD2, 1, setups.exposure, ("recon_pattern"+iterstr).c_str(), 1);
+      if(saveIter){
+        plt.plotComplex(cuda_gkp1, MOD2, 0, 1, ("recon_intensity"+iterstr).c_str(), 0);
+        plt.plotComplex(cuda_gkp1, PHASE, 0, 1, ("recon_phase"+iterstr).c_str(), 0);
+        plt.plotComplex(patternWave, MOD2, 1, exposure, ("recon_pattern"+iterstr).c_str(), 1);
       }
-      if(iter<0){  //Do Total variation denoising during the reconstruction, not quite effective tho.
-        takeMod2Diff<<<numBlocks,threadsPerBlock>>>(cuda_fftresult,cuda_targetfft, cuda_diff, useBS? cir:0);
+      if(0){  //Do Total variation denoising during the reconstruction, disabled because not quite effective.
+        takeMod2Diff<<<numBlocks,threadsPerBlock>>>(patternWave,patternData, cuda_diff, useBS? beamstop:0);
         cudaConvertFO<<<numBlocks,threadsPerBlock>>>(cuda_diff);
-        tvFilterWrap(cuda_diff, setups.noiseLevel, 200);
+        tvFilterWrap(cuda_diff, noiseLevel, 200);
         cudaConvertFO<<<numBlocks,threadsPerBlock>>>(cuda_diff);
-        setups.plt.plotFloat(cuda_diff, MOD, 1, 1, ("smootheddiff"+iterstr).c_str(), 1);
-        takeMod2Sum<<<numBlocks,threadsPerBlock>>>(cuda_fftresult, cuda_diff);
-        setups.plt.plotFloat(cuda_diff, MOD, 1, 1, ("smoothed"+iterstr).c_str(), 1);
+        plt.plotFloat(cuda_diff, MOD, 1, 1, ("smootheddiff"+iterstr).c_str(), 1);
+        takeMod2Sum<<<numBlocks,threadsPerBlock>>>(patternWave, cuda_diff);
+        plt.plotFloat(cuda_diff, MOD, 1, 1, ("smoothed"+iterstr).c_str(), 1);
       }
     }
   }
   if(gaussianKernel) ccmemMngr.returnCache(gaussianKernel);
   if(d_gaussianKernel) memMngr.returnCache(d_gaussianKernel);
-  m_verbose(setups,2,setups.plt.plotComplex(cuda_fftresult, MOD2, 1, setups.exposure, "recon_pattern", 1))
-  if(setups.verbose >= 4){
+  verbose(2,plt.plotComplex(patternWave, MOD2, 1, exposure, "recon_pattern", 1))
+  if(verbose >= 4){
     cudaF(cudaConvertFO)((complexFormat*)cuda_gkp1, cuda_gkprime);
-    setups.propagate(cuda_gkprime, cuda_gkprime, 1);
-    setups.plt.plotComplex(cuda_gkprime, PHASE, 1, 1, "recon_pattern_phase", 0);
+    propagate(cuda_gkprime, cuda_gkprime, 1);
+    plt.plotComplex(cuda_gkprime, PHASE, 1, 1, "recon_pattern_phase", 0);
   }
-  applyMod<<<numBlocks,threadsPerBlock>>>(cuda_fftresult,cuda_targetfft,useBS?cir:0,1,setups.nIter, setups.noiseLevel);
-  setups.plt.plotComplex(cuda_gkp1, MOD2, 0, 1, ("recon_intensity"+setups.save_suffix).c_str(), 0);
-  setups.plt.plotComplex(cuda_gkp1, PHASE, 0, 1, ("recon_phase"+setups.save_suffix).c_str(), 0);
-  if(setups.isFresnel) setups.multiplyFresnelPhase(cuda_gkp1, -setups.d);
-  setups.plt.plotComplex(cuda_gkp1, PHASE, 0, 1, ("recon_phase_fresnelRemoved"+setups.save_suffix).c_str(), 0);
+  applyMod<<<numBlocks,threadsPerBlock>>>(patternWave,patternData,useBS?beamstop:0,1,nIter, noiseLevel);
+  plt.plotComplex(cuda_gkp1, MOD2, 0, 1, ("recon_intensity"+save_suffix).c_str(), 0);
+  plt.plotComplex(cuda_gkp1, PHASE, 0, 1, ("recon_phase"+save_suffix).c_str(), 0);
+  if(isFresnel) multiplyFresnelPhase(cuda_gkp1, -d);
+  plt.plotComplex(cuda_gkp1, PHASE, 0, 1, ("recon_phase_fresnelRemoved"+save_suffix).c_str(), 0);
   memMngr.returnCache(cuda_gkprime);
   memMngr.returnCache(cuda_objMod);
   memMngr.returnCache(cuda_diff);
 
-  return cuda_fftresult;
+  return patternWave;
 }
 
 
@@ -667,7 +682,7 @@ int main(int argc, char** argv )
   if(argc < 2){
     printf("please feed the object intensity and phase image\n");
   }
-  if(setups.runSim) setups.d = setups.oversampling_spt*setups.pixelsize*setups.beamspotsize/setups.lambda; //distance to guarentee setups.oversampling
+  setups.readFiles();
   setups.init();
 
   //-----------------------configure experiment setups-----------------------------
@@ -685,28 +700,26 @@ int main(int argc, char** argv )
 
   Real fresnelNumber = M_PI*pow(setups.beamspotsize,2)/(setups.d*setups.lambda);
   printf("Fresnel Number = %f\n",fresnelNumber);
-  Real beta_HIO = 0.9;
-  cudaMemcpyToSymbol(cuda_beta_HIO,&beta_HIO,sizeof(beta_HIO));
+
   int sz = setups.row*setups.column*sizeof(complexFormat);
   complexFormat* cuda_pupilAmp, *cuda_ESW, *cuda_ESWP, *cuda_ESWPattern, *cuda_pupilAmp_SIM;
   if(setups.dopupil){
     cuda_pupilAmp = (complexFormat*)memMngr.borrowCache(sz);
     if(setups.runSim) cudaMemcpy(cuda_pupilAmp, setups.objectWave, sz, cudaMemcpyDeviceToDevice);
   }
+  setups.checkAutoCorrelation();
   if(setups.doIteration) {
     if(setups.runSim && setups.domnist){
       for(int i = 0; i < setups.mnistN; i++){
         setups.save_suffix = to_string(i);
         setups.prepareIter();
-        phaseRetrieve(setups); 
+        setups.phaseRetrieve(); 
       }
     }else{
       setups.prepareIter();
-      phaseRetrieve(setups); 
+      setups.phaseRetrieve(); 
     }
-    void* outputData = malloc(sz);
-    cudaMemcpy(outputData, setups.patternWave, sz, cudaMemcpyDeviceToHost);
-    writeComplexImage(setups.common.restart.c_str(), outputData, setups.row, setups.column);//save the step
+    setups.saveState();
   }
 
   //Now let's do pupil

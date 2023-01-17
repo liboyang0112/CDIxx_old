@@ -8,7 +8,6 @@ monoChromo::monoChromo(const char* configfile) : experimentConfig(configfile){}
 void monoChromo::init(int nrow, int ncol, int nlambda_, Real* lambdas_, Real* spectra_){
   nlambda = nlambda_;
   spectra = spectra_;
-  lambdas = lambdas_;
   row = nrow*oversampling;
   column = ncol*oversampling;
   rows = (int*)ccmemMngr.borrowCache(sizeof(int)*nlambda);
@@ -16,8 +15,59 @@ void monoChromo::init(int nrow, int ncol, int nlambda_, Real* lambdas_, Real* sp
   plt.init(row,column);
   locplan = ccmemMngr.borrowCache(sizeof(cufftHandle)*nlambda);
   for(int i = 0; i < nlambda; i++){
-    rows[i] = nearestEven(row*lambdas[i]);
-    cols[i] = nearestEven(column*lambdas[i]);
+    rows[i] = nearestEven(row*lambdas_[i]);
+    cols[i] = nearestEven(column*lambdas_[i]);
+    new(&(((cufftHandle*)locplan)[i]))cufftHandle();
+    cufftPlan2d ( &(((cufftHandle*)locplan)[i]), rows[i], cols[i], FFTformat);
+  }
+}
+void monoChromo::init(int nrow, int ncol, Real* lambdasi, Real* spectrumi, Real endlambda){
+  row = nrow*oversampling;
+  column = ncol*oversampling;
+  Real currentLambda = 1;
+  int currentPoint = 0;
+  int jump = 1;
+  Real stepsize = 2./row*jump;
+  nlambda = (endlambda-1)/stepsize;
+  spectra = (Real*) ccmemMngr.borrowCache(nlambda*sizeof(Real));
+  int i = 0;
+  Real tot = 0;
+  while(currentLambda < endlambda){
+    int count = 0;
+    Real intensity = 0;
+    while(lambdasi[currentPoint] < currentLambda+stepsize/2){
+      count++;
+      intensity += spectrumi[currentPoint];
+      currentPoint++;
+    }
+    if(count >=2 ){ //use average
+      spectra[i] = intensity/count;
+    }else{ //use interpolation
+      if(currentLambda == lambdasi[currentPoint-1]){
+        spectra[i] = spectrumi[currentPoint-1];
+      }
+      else if(currentLambda > lambdasi[currentPoint-1]){
+        Real dlambda = lambdasi[currentPoint]-lambdasi[currentPoint-1];
+        Real dx = (currentLambda - lambdasi[currentPoint-1])/dlambda;
+        spectra[i] = spectrumi[currentPoint-1]*(1-dx) + spectrumi[currentPoint]*(dx);
+      }else{
+        Real dlambda = lambdasi[currentPoint-1]-lambdasi[currentPoint-2];
+        Real dx = (currentLambda - lambdasi[currentPoint-2])/dlambda;
+        spectra[i] = spectrumi[currentPoint-2]*(1-dx) + spectrumi[currentPoint-1]*(dx);
+      }
+    }
+    tot+=spectra[i];
+    i++;
+    currentLambda+=stepsize;
+  }
+  rows = (int*)ccmemMngr.borrowCache(sizeof(int)*nlambda);
+  cols = (int*)ccmemMngr.borrowCache(sizeof(int)*nlambda);
+  plt.init(row,column);
+  locplan = ccmemMngr.borrowCache(sizeof(cufftHandle)*nlambda);
+  for(int i = 0; i < nlambda; i++){
+    rows[i] = row+i*2*jump;
+    cols[i] = column+i*2*jump;
+    printf("%d: (%d,%d)=%f\n",i, rows[i],cols[i],spectra[i]/=tot);
     new(&(((cufftHandle*)locplan)[i]))cufftHandle();
     cufftPlan2d ( &(((cufftHandle*)locplan)[i]), rows[i], cols[i], FFTformat);
   }
@@ -54,6 +104,7 @@ void monoChromo::generateMWL(void* d_input, void* d_patternSum, void* single){
 void monoChromo::solveMWL(void* d_input, void* d_output, void* initial)
 {
   int sz = row*column*sizeof(complexFormat);
+  if(nlambda<0) printf("nlambda not initialized: %d\n",nlambda);
   Real dt = 2;
   Real friction = 0.2;
   cudaMemcpy(d_output, initial? initial : d_input, sz, cudaMemcpyDeviceToDevice);
@@ -78,6 +129,7 @@ void monoChromo::solveMWL(void* d_input, void* d_output, void* initial)
     cudaF(cudaConvertFO)(fftb);
     cudaF(add)(deltab, (complexFormat*)d_output, -spectra[0]);
     for(int j = 1; j < nlambda; j++){
+      if(spectra[j]<=0) continue;
       size_t N = rows[j]*cols[j];
       init_cuda_image(rows[j], cols[j], 65536, 1);
       cudaF(pad)(fftb, padded, row, column);
@@ -94,7 +146,8 @@ void monoChromo::solveMWL(void* d_input, void* d_output, void* initial)
     //cudaF(add)((complexFormat*)d_output, deltab, stepsize*spectra[0]);
     if(i==nIter-1) plt.plotComplex(deltab, MOD, 0, 1, "residual", 1);
     for(int j = 1; j < nlambda; j++){
-      int N = int(rows[j]) * int(cols[j]);
+      if(spectra[j]<=0) continue;
+      //int N = int(rows[j]) * int(cols[j]);
       init_cuda_image(rows[j], cols[j], 65536, 1);
       cudaF(pad)((complexFormat*)deltab, padded, row, column);
       myCufftExec( ((cufftHandle*)locplan)[j], padded, padded, CUFFT_INVERSE);

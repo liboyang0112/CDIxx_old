@@ -1,6 +1,7 @@
 #include "imageReader.h"
 #include "readCXI.h"
 #include "common.h"
+#include "fstream"
 using namespace std;
 Real* readImage(const char* name, int &row, int &col, bool isFrequency){
   printf("reading file: %s\n", name);
@@ -61,3 +62,50 @@ void *readComplexImage(const char* name){
   return data;
 };
 
+void getNormSpectrum(const char* fspectrum, const char* ccd_response, Real &startLambda, int &nlambda, Real *& outlambda, Real *& outspectrum){
+  std::vector<Real> spectrum_lambda;
+  std::vector<Real> spectrum;
+  std::vector<Real> ccd_lambda;
+  std::vector<Real> ccd_rate;
+  std::ifstream file_spectrum, file_ccd_response;
+  Real threshold = 5e-3;
+  file_spectrum.open(fspectrum);
+  file_ccd_response.open(ccd_response);
+  Real lambda, val, maxval;
+  maxval = 0;
+  while(file_spectrum){
+    file_spectrum >> lambda >> val;
+    spectrum_lambda.push_back(lambda);
+    spectrum.push_back(val);
+    if(val > maxval) maxval = val;
+  }
+  while(file_ccd_response){
+    file_ccd_response >> lambda >> val;
+    ccd_lambda.push_back(lambda);
+    ccd_rate.push_back(val);
+  }
+  Real endlambda = ccd_lambda.back();
+  bool isShortest = 1;
+  int ccd_n = 0;
+  nlambda = 0;
+  for(int i = 0; i < spectrum.size(); i++){
+    if(spectrum_lambda[i] < ccd_lambda[0] || spectrum_lambda[i]<startLambda) continue;
+    if(spectrum_lambda[i] >= endlambda) break;
+    if(isShortest && spectrum[i] < threshold*maxval) continue;
+    if(isShortest) startLambda = spectrum_lambda[i];
+    isShortest = 0;
+    spectrum_lambda[nlambda] = spectrum_lambda[i]/startLambda;
+    while(ccd_lambda[ccd_n] < spectrum_lambda[i]) ccd_n++;
+    Real dx = (spectrum_lambda[i]-ccd_lambda[ccd_n-1])/(ccd_lambda[ccd_n] - ccd_lambda[ccd_n-1]);
+    Real ccd_rate_i = ccd_rate[ccd_n-1]*(1-dx) + ccd_rate[ccd_n]*dx;
+    //printf("ccd_rate = %f , dx = %f, spectrum = %f\n", ccd_rate_i, dx, spectrum[nlambda]);
+    spectrum[nlambda] = spectrum[i]*ccd_rate_i/maxval;
+    nlambda++;
+  }
+  outlambda = (Real*) ccmemMngr.borrowCache(sizeof(Real)*nlambda);
+  outspectrum = (Real*) ccmemMngr.borrowCache(sizeof(Real)*nlambda);
+  for(int i = 0; i < nlambda; i++){
+    outlambda[i] = spectrum_lambda[i];
+    outspectrum[i] = spectrum[i];
+  }
+}

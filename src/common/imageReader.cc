@@ -79,7 +79,6 @@ Mat* convertFromIntegerToComplex(Mat &image,Mat &phase,Mat* cache){
   return cache;
 }
 Real getVal(mode m, fftw_format &data){
-  printf("in getVal\n");
   switch(m){
     case MOD:
       return std::abs(data);
@@ -262,15 +261,18 @@ Mat* multiWLGenAVG_MAT(Mat* original, Mat* output, Real m, Real step, Real *spec
 	int startx = 0;
 	int starty = 0;
 	Mat* mergedf = fftw(original,0,1);
-	Real weight = 1./pow(2,2);//step/(1-1./m);
+	Real weight = 1;//step/(1-1./m);
         auto f = [&](int x, int y, complex<Real> &data){ data = pow(abs(data),2); };
         imageLoop<decltype(f), complex<Real>>(mergedf, &f);
 	output = convertFO<complex<Real>>(mergedf);
+
+	Real rl = 2;
+	Mat* tmp = convertFromComplexToInteger(output, 0, MOD, 0, 1./4, "merged", 1);
+	plotColor("originalPattern.png",tmp);
 	//build C matrix
 	Sparse *matrix = new Sparse(original->total(),original->total());
 	printf("rl=%f, max=%f, step=%f\n",1.,m,step);
 	//for(Real rl = 0.3; rl > 1./m-0.01; rl -= step){
-	Real rl = 2;
 	for(int idx = 0; idx < original->total(); idx++){
 	//int idx = original->cols*300+300;
 		addMatComponent_area(matrix, original->size(), idx/original->cols, idx%original->cols, rl, Real(original->rows)/2-0.5, Real(original->cols)/2-0.5,weight);

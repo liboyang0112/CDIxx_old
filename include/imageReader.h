@@ -77,7 +77,7 @@ Mat* convertFromComplexToInteger(Mat *fftwImage, Mat* opencvImage = 0, mode m = 
     rowo = opencvImage->ptr<pixeltype>(targetx);
     rowp = fftwImage->ptr<fftw_format>(x);
     for(int y = 0; y<column; y++){
-      Real target = getVal(m, rowp[y]);
+      Real target = getVal(m, rowp[y])*decay;
       tot += target;
       if(max < target) max = target;
       if(islog){
@@ -85,7 +85,7 @@ Mat* convertFromComplexToInteger(Mat *fftwImage, Mat* opencvImage = 0, mode m = 
           target = log2(target)*rcolor/log2(rcolor)+rcolor;
 	        if(target < 0) target = 0;
       }
-      else target*=rcolor*decay;
+      else target*=rcolor;
       if(target<0) target = -target;
 
       if(target>=rcolor) {
